@@ -218,9 +218,8 @@ class CruxAuthProvider extends ChangeNotifier {
       case 'network-request-failed':
         return 'Problème de connexion réseau.';
 
-      default:
+     default:
         return e.message ?? 'Une erreur Firebase est survenue.';
     }
   }
 }
-```
