@@ -28,7 +28,9 @@ class AuthService {
 
     final user = credential.user;
 
-    if (user != null && displayName != null && displayName.trim().isNotEmpty) {
+    if (user != null &&
+        displayName != null &&
+        displayName.trim().isNotEmpty) {
       await user.updateDisplayName(displayName.trim());
       await user.reload();
     }
@@ -77,7 +79,7 @@ class AuthService {
     try {
       await _googleSignIn.signOut();
     } catch (_) {
-      // Ignorer une éventuelle erreur de déconnexion locale.
+      // Une erreur locale Google ne doit pas empêcher la connexion.
     }
 
     googleUser = await _googleSignIn.signIn();
@@ -105,7 +107,7 @@ class AuthService {
       try {
         await _googleSignIn.signOut();
       } catch (_) {
-        // Ignorer une éventuelle erreur locale Google.
+        // Une erreur locale Google ne doit pas bloquer Firebase.
       }
     }
 
