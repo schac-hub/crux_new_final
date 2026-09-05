@@ -191,8 +191,7 @@ class AuthService {
 
   Stream<User?> get userChanges => _auth.userChanges();
 
-  Future<void> reloadUser() async {
+    Future<void> reloadUser() async {
     await _auth.currentUser?.reload();
   }
 }
-```
