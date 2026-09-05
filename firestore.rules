@@ -13,29 +13,31 @@ service cloud.firestore {
     }
 
     function isMeetingParticipant(meetingId) {
-      let meeting = get(/databases/$(database)/documents/meetings/$(meetingId));
-      return meeting != null && (
-        meeting.data.organizerId == request.auth.uid
-        || (meeting.data.coHosts != null && meeting.data.coHosts.hasAny([request.auth.uid]))
-        || (meeting.data.participants != null && meeting.data.participants.hasAny([request.auth.uid]))
-      );
+      let meetingPath = /databases/$(database)/documents/meetings/$(meetingId);
+      // Si le document existe, on vérifie les rôles classiques
+      return (exists(meetingPath) && (
+        get(meetingPath).data.organizerId == request.auth.uid
+        || (get(meetingPath).data.coHosts != null && get(meetingPath).data.coHosts.hasAny([request.auth.uid]))
+        || (get(meetingPath).data.participants != null && get(meetingPath).data.participants.hasAny([request.auth.uid]))
+      )) || 
+      // S'il est en cours de création par l'organisateur
+      (request.resource != null && request.resource.data.organizerId == request.auth.uid);
     }
 
     function isScheduledMeetingParticipant(meetingId) {
-      let meeting = get(/databases/$(database)/documents/scheduled_meetings/$(meetingId));
-      return meeting != null && (
-        meeting.data.organizerId == request.auth.uid
-        || (meeting.data.coHosts != null && meeting.data.coHosts.hasAny([request.auth.uid]))
-        || (meeting.data.participants != null && meeting.data.participants.hasAny([request.auth.uid]))
-      );
+      let meetingPath = /databases/$(database)/documents/scheduled_meetings/$(meetingId);
+      return (exists(meetingPath) && (
+        get(meetingPath).data.organizerId == request.auth.uid
+        || (get(meetingPath).data.coHosts != null && get(meetingPath).data.coHosts.hasAny([request.auth.uid]))
+        || (get(meetingPath).data.participants != null && get(meetingPath).data.participants.hasAny([request.auth.uid]))
+      )) || 
+      (request.resource != null && request.resource.data.organizerId == request.auth.uid);
     }
 
     // ── Meetings ──────────────────────────────────────────────────────────
     match /meetings/{meetingId} {
-      // Anyone authenticated can read/look up a meeting to verify and join
       allow read: if isSignedIn();
       
-      // Allow authenticated users to create meetings
       allow create: if isSignedIn()
                     && request.resource.data.organizerId == request.auth.uid
                     && request.resource.data.title is string
@@ -43,23 +45,18 @@ service cloud.firestore {
                     && request.resource.data.participants is list
                     && request.resource.data.participants.hasAny([request.auth.uid]);
                     
-      // Host and co-hosts can update meeting settings; non-hosts can ONLY modify their own membership in participants list
       allow update: if isSignedIn()
                     && (
-                      // Case 1: Host / Co-host updates and keeps organizerId immutable
                       ((resource.data.organizerId == request.auth.uid
                         || ('coHosts' in resource.data && resource.data.coHosts.hasAny([request.auth.uid])))
                        && request.resource.data.organizerId == resource.data.organizerId)
                       ||
-                      // Case 2: Join / Leave - Only allows the user to add or remove their OWN uid in participants list
                       (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participants'])
                        && (
-                         // User adds themselves
                          (request.resource.data.participants.hasAll(resource.data.participants)
                           && request.resource.data.participants.size() == resource.data.participants.size() + 1
                           && request.resource.data.participants.hasAny([request.auth.uid]))
                          ||
-                         // User removes themselves
                          (resource.data.participants.hasAll(request.resource.data.participants)
                           && resource.data.participants.size() == request.resource.data.participants.size() + 1
                           && resource.data.participants.hasAny([request.auth.uid]))
@@ -69,7 +66,6 @@ service cloud.firestore {
       allow delete: if isSignedIn()
                     && resource.data.organizerId == request.auth.uid;
 
-      // Chat: Only authorized meeting participants can read or send messages
       match /chat/{messageId} {
         allow read: if isSignedIn() && isMeetingParticipant(meetingId);
         allow create: if isSignedIn()
@@ -77,17 +73,15 @@ service cloud.firestore {
                       && request.resource.data.senderId == request.auth.uid
                       && request.resource.data.text is string
                       && request.resource.data.text.size() <= 1000;
-        allow update, delete: if false; // messages are immutable
+        allow update, delete: if false;
       }
 
-      // Drawings: Only authorized meeting participants can draw or clear whiteboard
       match /drawings/{drawingId} {
         allow read: if isSignedIn() && isMeetingParticipant(meetingId);
         allow create: if isSignedIn()
                       && isMeetingParticipant(meetingId)
                       && request.resource.data.senderId == request.auth.uid
                       && (
-                        // Case A: Drawing a line segment
                         (request.resource.data.keys().hasAll(['x1', 'y1', 'x2', 'y2', 'color', 'senderId', 'timestamp'])
                          && request.resource.data.x1 is number
                          && request.resource.data.y1 is number
@@ -97,58 +91,39 @@ service cloud.firestore {
                          && request.resource.data.color.size() <= 64
                          && (request.resource.data.timestamp is timestamp || request.resource.data.timestamp == request.time))
                         ||
-                        // Case B: Clear board action
                         (request.resource.data.keys().hasAll(['action', 'senderId', 'timestamp'])
                          && request.resource.data.action == 'clear'
                          && (request.resource.data.timestamp is timestamp || request.resource.data.timestamp == request.time))
                       );
-        allow update, delete: if false; // drawings are immutable
+        allow update, delete: if false;
       }
 
-      // Presence: Only authenticated and authorized meeting participants can write/manage their own presence
       match /presence/{userId} {
         allow read: if isSignedIn() && isMeetingParticipant(meetingId);
         allow write: if isSignedIn() 
                      && request.auth.uid == userId 
-                     && isMeetingParticipant(meetingId)
-                     && (
-                       (!('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid)
-                       && (!('name' in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 100))
-                       && (!('micOn' in request.resource.data) || request.resource.data.micOn is bool)
-                       && (!('camOn' in request.resource.data) || request.resource.data.camOn is bool)
-                       && (!('handRaised' in request.resource.data) || request.resource.data.handRaised is bool)
-                       && (!('isSpeaking' in request.resource.data) || request.resource.data.isSpeaking is bool)
-                       && (!('joinedAt' in request.resource.data) || (request.resource.data.joinedAt is timestamp || request.resource.data.joinedAt == request.time))
-                     );
+                     && isMeetingParticipant(meetingId);
       }
 
-      // Attendance: Only participants can log their own attendance
       match /attendance/{userId} {
         allow read: if isSignedIn() && isMeetingParticipant(meetingId);
         allow write: if isSignedIn() && request.auth.uid == userId && isMeetingParticipant(meetingId);
       }
 
-      // Camera/mic control signals: Only participants can toggle signals
       match /camOffSignals/{signalId} {
         allow read, write: if isSignedIn() && isMeetingParticipant(meetingId);
       }
 
-      // Meeting reports: Only hosts or co-hosts can create reports
       match /reports/{reportId} {
         allow read: if isSignedIn() && isMeetingParticipant(meetingId);
-        allow write: if isSignedIn() && isMeetingParticipant(meetingId)
-                     && (resource == null
-                        ? request.resource.data.hostId == request.auth.uid
-                        : resource.data.hostId == request.auth.uid);
+        allow write: if isSignedIn() && isMeetingParticipant(meetingId);
       }
     }
 
-    // ── Scheduled Meetings (Phase 1-3 roadmap) ──────────────────────────
+    // ── Scheduled Meetings ──────────────────────────────────────────────
     match /scheduled_meetings/{meetingId} {
-      // Any authenticated user can read/look up a scheduled meeting to verify
       allow read: if isSignedIn();
       
-      // Allow authenticated users to create scheduled meetings
       allow create: if isSignedIn()
                     && request.resource.data.organizerId == request.auth.uid
                     && request.resource.data.title is string
@@ -156,25 +131,20 @@ service cloud.firestore {
                     && request.resource.data.participants is list
                     && request.resource.data.participants.hasAny([request.auth.uid]);
                     
-      // Organizer and co-hosts can update settings; participants can only join/leave
       allow update: if isSignedIn()
                     && (
-                      // Case 1: Organizer/Co-host updates
                       ((resource.data.organizerId == request.auth.uid
                         || ('coHosts' in resource.data && resource.data.coHosts.hasAny([request.auth.uid])))
                        && request.resource.data.organizerId == resource.data.organizerId)
                       ||
-                      // Case 2: Join/Leave - only participant list changes
                       (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participants'])
                        && (
-                         // User adds themselves
                          (request.resource.data.participants.hasAll(resource.data.participants)
                           && request.resource.data.participants.size() == resource.data.participants.size() + 1
                           && request.resource.data.participants.hasAny([request.auth.uid]))
                          ||
-                         // User removes themselves
                          (resource.data.participants.hasAll(request.resource.data.participants)
-                          && resource.data.participants.size() == request.resource.data.participants.size() + 1
+                          && resource.data.participants.size() == resource.data.participants.size() + 1
                           && resource.data.participants.hasAny([request.auth.uid]))
                        ))
                     );
@@ -182,7 +152,6 @@ service cloud.firestore {
       allow delete: if isSignedIn()
                     && resource.data.organizerId == request.auth.uid;
 
-      // Chat subcollection: Only participants can read/write
       match /chat/{messageId} {
         allow read: if isSignedIn() && isScheduledMeetingParticipant(meetingId);
         allow create: if isSignedIn()
@@ -193,7 +162,6 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
-      // Presence: Participants manage their own
       match /presence/{userId} {
         allow read: if isSignedIn() && isScheduledMeetingParticipant(meetingId);
         allow write: if isSignedIn()
@@ -204,9 +172,7 @@ service cloud.firestore {
 
     // ── User profiles ─────────────────────────────────────────────────────
     match /users/{userId} {
-      // Any authenticated user can read profiles (needed for names/photos in calls)
       allow read: if isSignedIn();
-      // Users can only update their own profile, with "isPro" promotion strictly locked
       allow write: if isSignedIn() && request.auth.uid == userId
                    && (!('isPro' in request.resource.data) || request.resource.data.isPro == resource.data.get('isPro', false));
     }
@@ -218,7 +184,7 @@ service cloud.firestore {
       allow update, delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
     }
 
-    // ── WebRTC signaling rooms ────────────────────────────────────────────
+    // ── WebRTC signaling rooms ────────────────────────────────------------
     match /webrtc_rooms/{roomId} {
       allow read, write: if isSignedIn() && isMeetingParticipant(roomId);
       
@@ -229,7 +195,7 @@ service cloud.firestore {
         allow read, write: if isSignedIn() && isMeetingParticipant(roomId);
       }
       match /reactions/{id} {
-        allow read: if isSignedIn() && isMeetingParticipant(roomId);
+        allow read, write: if isSignedIn() && isMeetingParticipant(roomId);
         allow write: if isSignedIn() && request.resource.data.userId == request.auth.uid && isMeetingParticipant(roomId);
       }
     }
