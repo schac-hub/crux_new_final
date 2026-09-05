@@ -92,12 +92,7 @@ void main() {
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
 
-    try {
-      await WallpaperManager().init();
-    } catch (e) {
-      crux.logger.e('WallpaperManager init error', error: e);
-    }
-
+    // 1. Initialisation indispensable de Firebase
     try {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
@@ -120,6 +115,13 @@ void main() {
       return;
     }
 
+    // 2. Initialisation optionnelle isolée
+    try {
+      await WallpaperManager().init();
+    } catch (e) {
+      crux.logger.e('WallpaperManager init error (non-fatal)', error: e);
+    }
+
     try {
       NotificationService()
           .initialize()
@@ -140,7 +142,7 @@ void main() {
           );
     } catch (e) {
       crux.logger.e(
-        'Notification Service crash',
+        'Notification Service crash (non-fatal)',
         error: e,
       );
     }
@@ -222,8 +224,7 @@ class _ErrorApp extends StatelessWidget {
                     const SizedBox(width: 16),
                     ElevatedButton.icon(
                       onPressed: () {
-                        WidgetsFlutterBinding.ensureInitialized();
-                        main();
+                        runApp(const MyApp());
                       },
                       icon: const Icon(Icons.refresh, size: 18),
                       label: const Text('Réessayer'),
