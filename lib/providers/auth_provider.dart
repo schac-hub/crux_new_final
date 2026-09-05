@@ -1,402 +1,208 @@
-import 'dart:async';
-
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:logger/logger.dart';
 
-import '../models/user_model.dart';
 import '../services/auth_service.dart';
 
 class CruxAuthProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
-  final _logger = Logger();
 
-  UserModel? _currentUser;
+  User? get currentUser => _authService.currentUser;
+
+  bool get isAuthenticated => _authService.isAuthenticated;
+
   bool _isLoading = false;
-  String? _error;
-  bool _isLoggedIn = false;
-
-  StreamSubscription? _authSub;
-
-  UserModel? get currentUser => _currentUser;
-
   bool get isLoading => _isLoading;
 
-  String? get error => _error;
+  String? _errorMessage;
+  String? get errorMessage => _errorMessage;
 
-  bool get isLoggedIn => _isLoggedIn;
-
-  CruxAuthProvider() {
-    _authSub = _authService.authStateChanges.listen(
-      (user) {
-        if (user != null) {
-          _currentUser = UserModel(
-            uid: user.uid,
-            email: user.email ?? '',
-            name: user.displayName ?? 'Utilisateur',
-          );
-
-          _isLoggedIn = true;
-        } else {
-          _currentUser = null;
-          _isLoggedIn = false;
-        }
-
-        notifyListeners();
-      },
-    );
+  void _setLoading(bool value) {
+    _isLoading = value;
+    notifyListeners();
   }
 
-  @override
-  void dispose() {
-    _authSub?.cancel();
-    super.dispose();
+  void _clearError() {
+    _errorMessage = null;
   }
 
-  // ===========================================================================
-  // SIGN UP
-  // ===========================================================================
+  void _setError(String message) {
+    _errorMessage = message;
+  }
 
   Future<bool> signUp({
     required String email,
     required String password,
-    required String name,
+    String? displayName,
   }) async {
-    try {
-      _setLoading(true);
-      _clearError();
+    _setLoading(true);
+    _clearError();
 
-      final user = await _authService.signUp(
+    try {
+      await _authService.signUp(
         email: email,
         password: password,
-        name: name,
+        displayName: displayName,
       );
 
-      if (user != null) {
-        _currentUser = user;
-        _isLoggedIn = true;
-
-        _logger.i(
-          '✅ Inscription réussie',
-        );
-
-        notifyListeners();
-
-        return true;
-      }
-
-      _setError(
-        'Impossible de créer le compte.',
-      );
-
-      return false;
+      _setLoading(false);
+      notifyListeners();
+      return true;
     } on FirebaseAuthException catch (e) {
-      _logger.e(
-        '❌ Erreur inscription: ${e.code}',
-      );
-
-      _setError(
-        _firebaseErrorMessage(e.code),
-      );
-
+      _setError(_firebaseErrorMessage(e));
+      _setLoading(false);
+      notifyListeners();
       return false;
     } catch (e) {
-      _logger.e(
-        '❌ Erreur inscription: $e',
-      );
-
-      _setError(
-        'Erreur inscription: $e',
-      );
-
-      return false;
-    } finally {
+      _setError('Une erreur est survenue : $e');
       _setLoading(false);
+      notifyListeners();
+      return false;
     }
   }
-
-  // ===========================================================================
-  // SIGN IN
-  // ===========================================================================
 
   Future<bool> signIn({
     required String email,
     required String password,
   }) async {
-    try {
-      _setLoading(true);
-      _clearError();
+    _setLoading(true);
+    _clearError();
 
-      final user = await _authService.signIn(
+    try {
+      await _authService.signIn(
         email: email,
         password: password,
       );
 
-      if (user != null) {
-        _currentUser = user;
-        _isLoggedIn = true;
-
-        _logger.i(
-          '✅ Connexion réussie',
-        );
-
-        notifyListeners();
-
-        return true;
-      }
-
-      _setError(
-        'Utilisateur non trouvé',
-      );
-
-      return false;
+      _setLoading(false);
+      notifyListeners();
+      return true;
     } on FirebaseAuthException catch (e) {
-      _logger.e(
-        '❌ Erreur connexion: ${e.code}',
-      );
-
-      _setError(
-        _firebaseErrorMessage(e.code),
-      );
-
+      _setError(_firebaseErrorMessage(e));
+      _setLoading(false);
+      notifyListeners();
       return false;
     } catch (e) {
-      _logger.e(
-        '❌ Erreur connexion: $e',
-      );
-
-      _setError(
-        'Erreur connexion: $e',
-      );
-
-      return false;
-    } finally {
+      _setError('Une erreur est survenue : $e');
       _setLoading(false);
+      notifyListeners();
+      return false;
     }
   }
-
-  // ===========================================================================
-  // GOOGLE — SIGN IN
-  // ===========================================================================
 
   Future<bool> signInWithGoogle() async {
+    _setLoading(true);
+    _clearError();
+
     try {
-      _setLoading(true);
-      _clearError();
+      final user = await _authService.signInWithGoogle();
 
-      final user =
-          await _authService.signInWithGoogle();
+      _setLoading(false);
+      notifyListeners();
 
-      if (user != null) {
-        _currentUser = user;
-        _isLoggedIn = true;
-
-        _logger.i(
-          '✅ Connexion Google réussie',
-        );
-
-        notifyListeners();
-
-        return true;
-      }
-
-      return false;
+      return user != null;
     } on FirebaseAuthException catch (e) {
-      _logger.e(
-        '❌ Google auth error: ${e.code}',
-      );
-
-      _setError(
-        _firebaseErrorMessage(e.code),
-      );
-
+      _setError(_firebaseErrorMessage(e));
+      _setLoading(false);
+      notifyListeners();
       return false;
     } catch (e) {
-      _logger.e(
-        '❌ Connexion Google échouée: $e',
-      );
-
-      _setError(
-        'Connexion Google échouée: $e',
-      );
-
-      return false;
-    } finally {
+      _setError('Connexion Google impossible : $e');
       _setLoading(false);
+      notifyListeners();
+      return false;
     }
   }
-
-  // ===========================================================================
-  // GOOGLE — SIGN UP
-  // ===========================================================================
 
   Future<bool> signUpWithGoogle() async {
+    _setLoading(true);
+    _clearError();
+
     try {
-      _setLoading(true);
-      _clearError();
+      final user = await _authService.signUpWithGoogle();
 
-      final user =
-          await _authService.signUpWithGoogle();
+      _setLoading(false);
+      notifyListeners();
 
-      if (user != null) {
-        _currentUser = user;
-        _isLoggedIn = true;
-
-        _logger.i(
-          '✅ Inscription Google réussie',
-        );
-
-        notifyListeners();
-
-        return true;
-      }
-
-      return false;
+      return user != null;
     } on FirebaseAuthException catch (e) {
-      _logger.e(
-        '❌ Google signup error: ${e.code}',
-      );
-
-      _setError(
-        _firebaseErrorMessage(e.code),
-      );
-
+      _setError(_firebaseErrorMessage(e));
+      _setLoading(false);
+      notifyListeners();
       return false;
     } catch (e) {
-      _logger.e(
-        '❌ Inscription Google échouée: $e',
-      );
-
-      _setError(
-        'Inscription Google échouée: $e',
-      );
-
-      return false;
-    } finally {
+      _setError('Inscription Google impossible : $e');
       _setLoading(false);
+      notifyListeners();
+      return false;
     }
   }
-
-  // ===========================================================================
-  // SIGN OUT
-  // ===========================================================================
 
   Future<void> signOut() async {
-    try {
-      _setLoading(true);
-      _clearError();
+    _setLoading(true);
+    _clearError();
 
+    try {
       await _authService.signOut();
-
-      _currentUser = null;
-      _isLoggedIn = false;
-
-      _logger.i(
-        '✅ Déconnexion réussie',
-      );
-
-      notifyListeners();
     } catch (e) {
-      _setError(
-        'Erreur déconnexion: $e',
-      );
+      _setError('Erreur lors de la déconnexion : $e');
     } finally {
       _setLoading(false);
+      notifyListeners();
     }
   }
 
-  // ===========================================================================
-  // PASSWORD RESET
-  // ===========================================================================
+  Future<bool> resetPassword(String email) async {
+    _setLoading(true);
+    _clearError();
 
-  Future<bool> resetPassword(
-    String email,
-  ) async {
     try {
-      _setLoading(true);
-      _clearError();
-
       await _authService.resetPassword(email);
-
-      notifyListeners();
-
-      return true;
-    } catch (e) {
-      _setError(
-        'Erreur réinitialisation: $e',
-      );
-
-      return false;
-    } finally {
       _setLoading(false);
+      notifyListeners();
+      return true;
+    } on FirebaseAuthException catch (e) {
+      _setError(_firebaseErrorMessage(e));
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _setError('Impossible d’envoyer le lien : $e');
+      _setLoading(false);
+      notifyListeners();
+      return false;
     }
   }
 
-  // ===========================================================================
-  // HELPERS
-  // ===========================================================================
-
-  void _setLoading(
-    bool value,
-  ) {
-    _isLoading = value;
-    notifyListeners();
-  }
-
-  void _setError(
-    String error,
-  ) {
-    _error = error;
-    notifyListeners();
-  }
-
-  void _clearError() {
-    _error = null;
-  }
-
-  String _firebaseErrorMessage(
-    String code,
-  ) {
-    switch (code) {
-      case 'email-already-in-use':
-        return 'Cette adresse email est déjà utilisée.';
-
+  String _firebaseErrorMessage(FirebaseAuthException e) {
+    switch (e.code) {
       case 'invalid-email':
-        return 'Adresse email invalide.';
-
-      case 'weak-password':
-        return 'Le mot de passe est trop faible.';
-
+        return 'Adresse e-mail invalide.';
+      case 'user-disabled':
+        return 'Ce compte a été désactivé.';
       case 'user-not-found':
-        return 'Utilisateur non trouvé.';
-
+        return 'Aucun compte ne correspond à cette adresse e-mail.';
       case 'wrong-password':
       case 'invalid-credential':
-        return 'Email ou mot de passe incorrect.';
-
-      case 'user-disabled':
-        return 'Ce compte est désactivé.';
-
-      case 'too-many-requests':
-        return 'Trop de tentatives. Réessayez plus tard.';
-
-      case 'network-request-failed':
-        return 'Erreur réseau. Vérifiez votre connexion.';
-
-      case 'popup-closed-by-user':
-      case 'cancelled-popup-request':
-        return 'Connexion Google annulée.';
-
-      case 'popup-blocked':
-        return 'Le navigateur a bloqué la fenêtre Google.';
-
-      case 'account-exists-with-different-credential':
-        return 'Un compte existe déjà avec une autre méthode de connexion.';
-
+        return 'E-mail ou mot de passe incorrect.';
+      case 'email-already-in-use':
+        return 'Cette adresse e-mail est déjà utilisée.';
+      case 'weak-password':
+        return 'Le mot de passe est trop faible.';
       case 'operation-not-allowed':
         return 'Cette méthode de connexion n’est pas activée.';
-
+      case 'account-exists-with-different-credential':
+        return 'Un compte existe déjà avec une autre méthode de connexion.';
+      case 'popup-closed-by-user':
+        return 'La fenêtre Google a été fermée.';
+      case 'popup-blocked':
+        return 'La fenêtre Google a été bloquée par le navigateur.';
+      case 'cancelled-popup-request':
+        return 'La connexion Google a été annulée.';
+      case 'network-request-failed':
+        return 'Problème de connexion réseau.';
       default:
-        return 'Erreur d’authentification: $code';
+        return e.message ?? 'Une erreur Firebase est survenue.';
     }
   }
 }
+```
