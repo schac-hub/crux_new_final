@@ -7,96 +7,68 @@ import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 
 /// Service centralisé LiveKit pour CRUX.
-///
-/// Architecture Large Webinar:
-///
-/// - Capacité cible : 10 000 participants
-/// - Vidéos rendues localement : maximum 10
-/// - LiveKit SFU
-/// - Adaptive Stream activé
-/// - Dynacast activé
-/// - Simulcast activé
-///
-/// IMPORTANT:
-/// La capacité réelle de la room doit également être configurée
-/// côté LiveKit / token server / Room Service.
-///
-/// Le client Flutter ne peut pas imposer à lui seul une limite
-/// serveur de 10 000 participants.
 class LiveKitService {
   LiveKitService._();
 
-  static final LiveKitService instance = LiveKitService._();
+  static final LiveKitService instance =
+      LiveKitService._();
 
   // ===========================================================================
   // LARGE WEBINAR CONFIGURATION
   // ===========================================================================
 
-  /// Nombre maximum de participants que CRUX prévoit pour un webinaire.
   static const int targetCapacity = 10000;
 
-  /// Nombre maximum de vidéos affichées simultanément dans l'UI.
-  ///
-  /// La room peut contenir des milliers de participants, mais le client
-  /// ne doit jamais essayer de rendre des milliers de vidéos.
   static const int maxVisibleVideoTiles = 10;
 
-  /// Nombre maximum de tentatives pour obtenir un token.
   static const int maxTokenAttempts = 3;
 
-  /// Version de l'architecture utilisée par le client.
   static const String architectureVersion =
       'large_webinar_10k_v2';
+
+  /// Dernière URL LiveKit retournée par le token server.
+  String? _lastServerUrl;
+
+  String? get lastServerUrl =>
+      _lastServerUrl;
 
   // ===========================================================================
   // TOKEN
   // ===========================================================================
 
-  /// Récupère un token LiveKit auprès du token server.
-  ///
-  /// [isHost] :
-  /// - true  => host / speaker
-  /// - false => audience
-  ///
-  /// Architecture recommandée:
-  ///
-  /// HOST:
-  ///   canPublish   = true
-  ///   canSubscribe = true
-  ///
-  /// AUDIENCE:
-  ///   canPublish   = false
-  ///   canSubscribe = true
-  ///
-  /// Le serveur doit impérativement recalculer ces permissions
-  /// côté backend et ne jamais faire confiance aux valeurs envoyées
-  /// par le client.
   Future<String?> fetchToken({
     required String room,
     required String identity,
     required String name,
     bool isHost = false,
   }) async {
-    final cleanRoom = room.trim();
-    final cleanIdentity = identity.trim();
-    final cleanName = name.trim();
+    final cleanRoom =
+        room.trim();
 
-    // -------------------------------------------------------------------------
-    // VALIDATION
-    // -------------------------------------------------------------------------
+    final cleanIdentity =
+        identity.trim();
+
+    final cleanName =
+        name.trim();
 
     if (cleanRoom.isEmpty) {
-      _error('Room name is empty.');
+      _error(
+        'Room name is empty.',
+      );
       return null;
     }
 
     if (cleanIdentity.isEmpty) {
-      _error('Participant identity is empty.');
+      _error(
+        'Participant identity is empty.',
+      );
       return null;
     }
 
     if (cleanName.isEmpty) {
-      _error('Participant name is empty.');
+      _error(
+        'Participant name is empty.',
+      );
       return null;
     }
 
@@ -110,18 +82,26 @@ class LiveKitService {
       return null;
     }
 
-    final uri = Uri.tryParse(endpoint);
+    final sandboxId =
+        AppConfig.livekitSandboxId.trim();
 
-    if (uri == null || !uri.hasScheme) {
+    if (sandboxId.isEmpty) {
+      _error(
+        'LiveKit sandbox ID is empty.',
+      );
+      return null;
+    }
+
+    final uri =
+        Uri.tryParse(endpoint);
+
+    if (uri == null ||
+        !uri.hasScheme) {
       _error(
         'Invalid LiveKit token endpoint: $endpoint',
       );
       return null;
     }
-
-    // -------------------------------------------------------------------------
-    // RETRY
-    // -------------------------------------------------------------------------
 
     for (
       var attempt = 1;
@@ -130,97 +110,41 @@ class LiveKitService {
     ) {
       try {
         developer.log(
-          'LiveKit token request '
+          'LiveKit sandbox token request '
           '(attempt=$attempt/$maxTokenAttempts, '
           'room=$cleanRoom, '
           'identity=$cleanIdentity, '
-          'role=${isHost ? 'speaker' : 'audience'})',
+          'role=${isHost ? 'host' : 'audience'})',
           level: 800,
         );
+
+        // ---------------------------------------------------------------------
+        // EXACT SANDBOX REQUEST
+        // ---------------------------------------------------------------------
 
         final response = await http
             .post(
               uri,
-              headers: const {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
+              headers: {
+                'X-Sandbox-ID':
+                    sandboxId,
+                'Content-Type':
+                    'application/json',
+                'Accept':
+                    'application/json',
               },
               body: jsonEncode(
                 {
-                  // ----------------------------------------------------------------
-                  // Standard LiveKit token server fields
-                  // ----------------------------------------------------------------
-
-                  'room': cleanRoom,
-                  'room_name': cleanRoom,
-
-                  'identity': cleanIdentity,
-
-                  'name': cleanName,
-                  'participant_name': cleanName,
-
-                  // ----------------------------------------------------------------
-                  // CRUX role
-                  // ----------------------------------------------------------------
-
-                  'isHost': isHost,
-
-                  'role': isHost
-                      ? 'speaker'
-                      : 'audience',
-
-                  // ----------------------------------------------------------------
-                  // Permissions requested by the client.
-                  //
-                  // IMPORTANT:
-                  // The backend MUST validate/recalculate these values.
-                  // ----------------------------------------------------------------
-
-                  'canPublish': isHost,
-                  'canSubscribe': true,
-
-                  // ----------------------------------------------------------------
-                  // Large webinar metadata
-                  // ----------------------------------------------------------------
-
-                  'conferenceType':
-                      'large_webinar',
-
-                  'architecture':
-                      architectureVersion,
-
-                  'targetCapacity':
-                      targetCapacity,
-
-                  'maxParticipants':
-                      targetCapacity,
-
-                  'maxVisibleVideoTiles':
-                      maxVisibleVideoTiles,
-
-                  // ----------------------------------------------------------------
-                  // Optimization flags
-                  // ----------------------------------------------------------------
-
-                  'adaptiveStream': true,
-
-                  'dynacast': true,
-
-                  'simulcast': true,
-
-                  // ----------------------------------------------------------------
-                  // Audience / speaker behavior
-                  // ----------------------------------------------------------------
-
-                  'isAudience': !isHost,
-
-                  'isSpeaker': isHost,
+                  'room_name':
+                      cleanRoom,
+                  'participant_name':
+                      cleanName,
                 },
               ),
             )
             .timeout(
-              AppConfig.tokenTimeout,
-            );
+          AppConfig.tokenTimeout,
+        );
 
         developer.log(
           'LiveKit token response: '
@@ -240,8 +164,11 @@ class LiveKitService {
             '${_safeResponseBody(response.body)}',
           );
 
-          if (attempt < maxTokenAttempts) {
-            await _waitBeforeRetry(attempt);
+          if (attempt <
+              maxTokenAttempts) {
+            await _waitBeforeRetry(
+              attempt,
+            );
             continue;
           }
 
@@ -253,15 +180,21 @@ class LiveKitService {
         // ---------------------------------------------------------------------
 
         final dynamic decoded =
-            jsonDecode(response.body);
+            jsonDecode(
+          response.body,
+        );
 
-        if (decoded is! Map<String, dynamic>) {
+        if (decoded
+            is! Map<String, dynamic>) {
           _error(
             'Invalid LiveKit response format.',
           );
 
-          if (attempt < maxTokenAttempts) {
-            await _waitBeforeRetry(attempt);
+          if (attempt <
+              maxTokenAttempts) {
+            await _waitBeforeRetry(
+              attempt,
+            );
             continue;
           }
 
@@ -273,7 +206,9 @@ class LiveKitService {
         // ---------------------------------------------------------------------
 
         final token =
-            _extractToken(decoded);
+            _extractToken(
+          decoded,
+        );
 
         if (token == null ||
             token.isEmpty) {
@@ -282,8 +217,11 @@ class LiveKitService {
             'a participant token.',
           );
 
-          if (attempt < maxTokenAttempts) {
-            await _waitBeforeRetry(attempt);
+          if (attempt <
+              maxTokenAttempts) {
+            await _waitBeforeRetry(
+              attempt,
+            );
             continue;
           }
 
@@ -295,11 +233,25 @@ class LiveKitService {
         // ---------------------------------------------------------------------
 
         final serverUrl =
-            _extractServerUrl(decoded);
+            _extractServerUrl(
+          decoded,
+        );
+
+        if (serverUrl != null &&
+            serverUrl.isNotEmpty) {
+          _lastServerUrl =
+              serverUrl;
+
+          AppConfig
+              .setLivekitWssUrl(
+            serverUrl,
+          );
+        }
 
         developer.log(
           'LiveKit credentials received. '
-          'serverUrl=${serverUrl ?? AppConfig.livekitWssUrl}',
+          'serverUrl='
+          '${serverUrl ?? AppConfig.livekitWssUrl}',
           level: 800,
         );
 
@@ -310,8 +262,11 @@ class LiveKitService {
           'after ${AppConfig.tokenTimeout.inSeconds}s.',
         );
 
-        if (attempt < maxTokenAttempts) {
-          await _waitBeforeRetry(attempt);
+        if (attempt <
+            maxTokenAttempts) {
+          await _waitBeforeRetry(
+            attempt,
+          );
           continue;
         }
 
@@ -321,8 +276,11 @@ class LiveKitService {
           'Invalid LiveKit JSON response: $e',
         );
 
-        if (attempt < maxTokenAttempts) {
-          await _waitBeforeRetry(attempt);
+        if (attempt <
+            maxTokenAttempts) {
+          await _waitBeforeRetry(
+            attempt,
+          );
           continue;
         }
 
@@ -332,8 +290,11 @@ class LiveKitService {
           'LiveKit token HTTP client error: $e',
         );
 
-        if (attempt < maxTokenAttempts) {
-          await _waitBeforeRetry(attempt);
+        if (attempt <
+            maxTokenAttempts) {
+          await _waitBeforeRetry(
+            attempt,
+          );
           continue;
         }
 
@@ -346,8 +307,11 @@ class LiveKitService {
           level: 1000,
         );
 
-        if (attempt < maxTokenAttempts) {
-          await _waitBeforeRetry(attempt);
+        if (attempt <
+            maxTokenAttempts) {
+          await _waitBeforeRetry(
+            attempt,
+          );
           continue;
         }
 
@@ -362,14 +326,11 @@ class LiveKitService {
   // TOKEN EXTRACTION
   // ===========================================================================
 
-  /// Accepte plusieurs formats de token server.
-  ///
-  /// Cela permet à CRUX de fonctionner avec différents backends
-  /// LiveKit sans modifier l'écran de conférence.
   String? _extractToken(
     Map<String, dynamic> data,
   ) {
-    final candidates = <dynamic>[
+    final candidates =
+        <dynamic>[
       data['participantToken'],
       data['participant_token'],
       data['token'],
@@ -377,64 +338,59 @@ class LiveKitService {
       data['access_token'],
     ];
 
-    // -------------------------------------------------------------------------
-    // credentials
-    // -------------------------------------------------------------------------
-
     final credentials =
         data['credentials'];
 
     if (credentials is Map) {
-      candidates.addAll(
-        [
-          credentials['participantToken'],
-          credentials['participant_token'],
-          credentials['token'],
-          credentials['accessToken'],
-          credentials['access_token'],
-        ],
-      );
+      candidates.addAll([
+        credentials[
+            'participantToken'],
+        credentials[
+            'participant_token'],
+        credentials['token'],
+        credentials[
+            'accessToken'],
+        credentials[
+            'access_token'],
+      ]);
     }
-
-    // -------------------------------------------------------------------------
-    // data
-    // -------------------------------------------------------------------------
 
     final dataField =
         data['data'];
 
     if (dataField is Map) {
-      candidates.addAll(
-        [
-          dataField['participantToken'],
-          dataField['participant_token'],
-          dataField['token'],
-          dataField['accessToken'],
-          dataField['access_token'],
-        ],
-      );
+      candidates.addAll([
+        dataField[
+            'participantToken'],
+        dataField[
+            'participant_token'],
+        dataField['token'],
+        dataField[
+            'accessToken'],
+        dataField[
+            'access_token'],
+      ]);
     }
-
-    // -------------------------------------------------------------------------
-    // result
-    // -------------------------------------------------------------------------
 
     final result =
         data['result'];
 
     if (result is Map) {
-      candidates.addAll(
-        [
-          result['participantToken'],
-          result['participant_token'],
-          result['token'],
-          result['accessToken'],
-          result['access_token'],
-        ],
-      );
+      candidates.addAll([
+        result[
+            'participantToken'],
+        result[
+            'participant_token'],
+        result['token'],
+        result[
+            'accessToken'],
+        result[
+            'access_token'],
+      ]);
     }
 
-    for (final value in candidates) {
+    for (final value
+        in candidates) {
       if (value is String &&
           value.trim().isNotEmpty) {
         return value.trim();
@@ -451,7 +407,8 @@ class LiveKitService {
   String? _extractServerUrl(
     Map<String, dynamic> data,
   ) {
-    final candidates = <dynamic>[
+    final candidates =
+        <dynamic>[
       data['serverUrl'],
       data['server_url'],
       data['url'],
@@ -459,64 +416,59 @@ class LiveKitService {
       data['livekit_url'],
     ];
 
-    // -------------------------------------------------------------------------
-    // credentials
-    // -------------------------------------------------------------------------
-
     final credentials =
         data['credentials'];
 
     if (credentials is Map) {
-      candidates.addAll(
-        [
-          credentials['serverUrl'],
-          credentials['server_url'],
-          credentials['url'],
-          credentials['livekitUrl'],
-          credentials['livekit_url'],
-        ],
-      );
+      candidates.addAll([
+        credentials[
+            'serverUrl'],
+        credentials[
+            'server_url'],
+        credentials['url'],
+        credentials[
+            'livekitUrl'],
+        credentials[
+            'livekit_url'],
+      ]);
     }
-
-    // -------------------------------------------------------------------------
-    // data
-    // -------------------------------------------------------------------------
 
     final dataField =
         data['data'];
 
     if (dataField is Map) {
-      candidates.addAll(
-        [
-          dataField['serverUrl'],
-          dataField['server_url'],
-          dataField['url'],
-          dataField['livekitUrl'],
-          dataField['livekit_url'],
-        ],
-      );
+      candidates.addAll([
+        dataField[
+            'serverUrl'],
+        dataField[
+            'server_url'],
+        dataField['url'],
+        dataField[
+            'livekitUrl'],
+        dataField[
+            'livekit_url'],
+      ]);
     }
-
-    // -------------------------------------------------------------------------
-    // result
-    // -------------------------------------------------------------------------
 
     final result =
         data['result'];
 
     if (result is Map) {
-      candidates.addAll(
-        [
-          result['serverUrl'],
-          result['server_url'],
-          result['url'],
-          result['livekitUrl'],
-          result['livekit_url'],
-        ],
-      );
+      candidates.addAll([
+        result[
+            'serverUrl'],
+        result[
+            'server_url'],
+        result['url'],
+        result[
+            'livekitUrl'],
+        result[
+            'livekit_url'],
+      ]);
     }
 
-    for (final value in candidates) {
+    for (final value
+        in candidates) {
       if (value is String &&
           value.trim().isNotEmpty) {
         return value.trim();
@@ -527,14 +479,17 @@ class LiveKitService {
   }
 
   // ===========================================================================
-  // RETRY BACKOFF
+  // RETRY
   // ===========================================================================
 
   Future<void> _waitBeforeRetry(
     int attempt,
   ) async {
     final multiplier =
-        attempt.clamp(1, 3);
+        attempt.clamp(
+      1,
+      3,
+    );
 
     await Future<void>.delayed(
       AppConfig.retryBackoff *
@@ -546,9 +501,6 @@ class LiveKitService {
   // SAFE LOGGING
   // ===========================================================================
 
-  /// Évite d'envoyer un body potentiellement énorme dans les logs.
-  ///
-  /// On ne log jamais un token complet.
   String _safeResponseBody(
     String body,
   ) {
@@ -562,7 +514,7 @@ class LiveKitService {
   }
 
   // ===========================================================================
-  // ARCHITECTURE INFORMATION
+  // ARCHITECTURE
   // ===========================================================================
 
   String get architectureDescription {
@@ -573,54 +525,31 @@ Target capacity     : $targetCapacity participants
 Visible videos      : $maxVisibleVideoTiles
 Transport            : LiveKit SFU
 
-Client optimization:
-  Adaptive Stream    : enabled
-  Dynacast           : enabled
-  Simulcast          : enabled
-
-HOST / SPEAKER:
-  canPublish         : true
-  canSubscribe       : true
+HOST:
+  canPublish         : server-controlled
 
 AUDIENCE:
-  canPublish         : false
-  canSubscribe       : true
+  canPublish         : server-controlled
 
 Architecture:
   10,000 participants
   -> LiveKit SFU
   -> selective subscription
   -> maximum 10 rendered video tiles
-  -> audio remains independent from video rendering
-
-Server requirement:
-  max_participants >= $targetCapacity
 ''';
   }
 
-  // ===========================================================================
-  // CONFIGURATION HELPERS
-  // ===========================================================================
-
-  /// Nombre maximum de participants prévu par CRUX.
   int get maximumParticipants =>
       targetCapacity;
 
-  /// Nombre maximum de vidéos que l'UI doit afficher.
   int get maximumVisibleVideos =>
       maxVisibleVideoTiles;
 
-  /// Indique que le service est configuré pour un grand webinaire.
   bool get isLargeWebinar =>
       targetCapacity >= 3000;
 
-  /// Indique que la cible 10K est activée.
   bool get supportsTenThousandParticipants =>
       targetCapacity >= 10000;
-
-  // ===========================================================================
-  // DIAGNOSTICS
-  // ===========================================================================
 
   Map<String, dynamic>
       get diagnostics {
@@ -639,16 +568,18 @@ Server requirement:
           true,
       'transport':
           'LiveKit SFU',
+      'tokenEndpoint':
+          AppConfig.livekitTokenEndpoint,
+      'sandboxId':
+          AppConfig.livekitSandboxId,
+      'serverUrl':
+          AppConfig.livekitWssUrl,
       'largeWebinar':
           isLargeWebinar,
       'supports10K':
           supportsTenThousandParticipants,
     };
   }
-
-  // ===========================================================================
-  // LOGGING
-  // ===========================================================================
 
   void _error(
     String message,
