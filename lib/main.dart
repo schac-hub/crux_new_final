@@ -42,6 +42,7 @@ Locale _materialFallback(Locale locale) =>
 class _FallbackMaterialLocalizationsDelegate
     extends LocalizationsDelegate<MaterialLocalizations> {
   const _FallbackMaterialLocalizationsDelegate();
+
   static const instance = _FallbackMaterialLocalizationsDelegate();
 
   @override
@@ -58,6 +59,7 @@ class _FallbackMaterialLocalizationsDelegate
 class _FallbackCupertinoLocalizationsDelegate
     extends LocalizationsDelegate<CupertinoLocalizations> {
   const _FallbackCupertinoLocalizationsDelegate();
+
   static const instance = _FallbackCupertinoLocalizationsDelegate();
 
   @override
@@ -80,7 +82,11 @@ const List<LocalizationsDelegate<dynamic>> _localizationsDelegates = [
 void main() {
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
-    crux.logger.e('Flutter Framework Error', error: details.exception, stackTrace: details.stack);
+    crux.logger.e(
+      'Flutter Framework Error',
+      error: details.exception,
+      stackTrace: details.stack,
+    );
   };
 
   runZonedGuarded(() async {
@@ -96,37 +102,74 @@ void main() {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
+
       FirebaseFirestore.instance.settings = const Settings(
         persistenceEnabled: true,
         cacheSizeBytes: 40 * 1024 * 1024,
       );
+
       crux.logger.i('Firebase initialized');
     } catch (e) {
       crux.logger.e('Firebase init error', error: e);
-      runApp(_ErrorApp(title: 'Firebase Error', message: e.toString()));
+      runApp(
+        _ErrorApp(
+          title: 'Firebase Error',
+          message: e.toString(),
+        ),
+      );
       return;
     }
 
     try {
-      NotificationService().initialize().catchError((e) => crux.logger.e('Notification init failed', error: e));
+      NotificationService()
+          .initialize()
+          .catchError(
+            (e) => crux.logger.e(
+              'Notification init failed',
+              error: e,
+            ),
+          );
+
       MeetingNotificationManager.instance
           .initialize()
-          .catchError((e) => crux.logger.e('Meeting reminders init failed', error: e));
+          .catchError(
+            (e) => crux.logger.e(
+              'Meeting reminders init failed',
+              error: e,
+            ),
+          );
     } catch (e) {
-      crux.logger.e('Notification Service crash', error: e);
+      crux.logger.e(
+        'Notification Service crash',
+        error: e,
+      );
     }
 
     runApp(const MyApp());
   }, (error, stack) {
-    crux.logger.e('Global App Crash', error: error, stackTrace: stack);
-    runApp(_ErrorApp(title: 'Startup Error', message: error.toString()));
+    crux.logger.e(
+      'Global App Crash',
+      error: error,
+      stackTrace: stack,
+    );
+
+    runApp(
+      _ErrorApp(
+        title: 'Startup Error',
+        message: error.toString(),
+      ),
+    );
   });
 }
 
 class _ErrorApp extends StatelessWidget {
   final String title;
   final String message;
-  const _ErrorApp({required this.title, required this.message});
+
+  const _ErrorApp({
+    required this.title,
+    required this.message,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -140,27 +183,41 @@ class _ErrorApp extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(Icons.bug_report_rounded, color: Colors.redAccent, size: 80),
+                const Icon(
+                  Icons.bug_report_rounded,
+                  color: Colors.redAccent,
+                  size: 80,
+                ),
                 const SizedBox(height: 24),
-                Text(title, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 const SizedBox(height: 12),
                 Text(
                   _getUXFriendlyMessage(message),
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                  ),
                 ),
                 const SizedBox(height: 32),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     ElevatedButton.icon(
-                      onPressed: () {
-                        // SystemNavigator.pop() not supported on web
-                        // On web, this button is hidden or does nothing
-                      },
+                      onPressed: () {},
                       icon: const Icon(Icons.close, size: 18),
                       label: const Text('Quitter'),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white10,
+                        foregroundColor: Colors.white,
+                      ),
                     ),
                     const SizedBox(width: 16),
                     ElevatedButton.icon(
@@ -170,7 +227,10 @@ class _ErrorApp extends StatelessWidget {
                       },
                       icon: const Icon(Icons.refresh, size: 18),
                       label: const Text('Réessayer'),
-                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.black),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.black,
+                      ),
                     ),
                   ],
                 ),
@@ -183,32 +243,65 @@ class _ErrorApp extends StatelessWidget {
   }
 
   String _getUXFriendlyMessage(String msg) {
-    if (msg.contains('DefaultFirebaseOptions')) return 'Configuration serveur manquante. Veuillez réinstaller l\'application.';
-    if (msg.contains('network')) return 'Connexion impossible. Vérifiez votre accès Internet.';
-    if (msg.contains('api-key')) return 'Clé API invalide. Contactez le support.';
-    if (msg.contains('project-not-found')) return 'Projet Firebase introuvable.';
+    if (msg.contains('DefaultFirebaseOptions')) {
+      return 'Configuration serveur manquante. Veuillez réinstaller l\'application.';
+    }
+
+    if (msg.contains('network')) {
+      return 'Connexion impossible. Vérifiez votre accès Internet.';
+    }
+
+    if (msg.contains('api-key')) {
+      return 'Clé API invalide. Contactez le support.';
+    }
+
+    if (msg.contains('project-not-found')) {
+      return 'Projet Firebase introuvable.';
+    }
+
     return 'Une erreur inattendue empêche l\'application de démarrer.';
   }
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
+
   static final _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => CruxAuthProvider()),
-        ChangeNotifierProvider(create: (_) => MeetingProvider()),
-        ChangeNotifierProvider(create: (_) => MeetingStateProvider()),
-        ChangeNotifierProvider(create: (_) => ThemeProvider()),
-        ChangeNotifierProvider(create: (_) => LocaleProvider()),
-        ChangeNotifierProvider(create: (_) => VirtualBackgroundController()),
-        ChangeNotifierProvider(create: (_) => WallpaperProvider()),
+        ChangeNotifierProvider(
+          create: (_) => CruxAuthProvider(),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => MeetingProvider(),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => MeetingStateProvider(),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => ThemeProvider(),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => LocaleProvider(),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => VirtualBackgroundController(),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => WallpaperProvider(),
+        ),
       ],
       child: Consumer3<ThemeProvider, LocaleProvider, WallpaperProvider>(
-        builder: (context, themeProvider, localeProvider, wallpaper, _) {
+        builder: (
+          context,
+          themeProvider,
+          localeProvider,
+          wallpaper,
+          _,
+        ) {
           return MaterialApp(
             navigatorKey: MyApp._navigatorKey,
             title: 'CRUX',
@@ -234,6 +327,7 @@ class MyApp extends StatelessWidget {
 
 class AuthWrapper extends StatefulWidget {
   const AuthWrapper({super.key});
+
   @override
   State<AuthWrapper> createState() => _AuthWrapperState();
 }
@@ -261,11 +355,20 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
   Future<void> _initDeepLinks() async {
     try {
-      _deepLinkSubscription = _appLinks.uriLinkStream.listen((uri) => _handleDeepLink(uri));
+      _deepLinkSubscription = _appLinks.uriLinkStream.listen(
+        (uri) => _handleDeepLink(uri),
+      );
+
       final initialUri = await _appLinks.getInitialLink();
-      if (initialUri != null) _handleDeepLink(initialUri);
+
+      if (initialUri != null) {
+        _handleDeepLink(initialUri);
+      }
     } catch (e) {
-      crux.logger.w('Deep link error', error: e);
+      crux.logger.w(
+        'Deep link error',
+        error: e,
+      );
     }
   }
 
@@ -273,8 +376,11 @@ class _AuthWrapperState extends State<AuthWrapper> {
     if (!mounted) return;
 
     String? meetingId;
+
     if (uri.scheme == 'crux' && uri.host == 'join') {
-      meetingId = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : null;
+      meetingId = uri.pathSegments.isNotEmpty
+          ? uri.pathSegments.first
+          : null;
     } else if ((uri.scheme == 'https' || uri.scheme == 'http') &&
         uri.pathSegments.length >= 2 &&
         uri.pathSegments[uri.pathSegments.length - 2] == 'join') {
@@ -282,38 +388,78 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
 
     if (meetingId == null || meetingId.isEmpty) return;
+
     final mid = meetingId.trim().toUpperCase();
 
     _pendingMeetingId = mid;
 
-    if (!mounted) return;
-
     final current = FirebaseAuth.instance.currentUser;
+
     if (current != null && !current.isAnonymous) {
       _joinMeetingAsAuthenticatedUser(mid);
     } else {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => GuestJoinScreen(meetingId: mid)));
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => GuestJoinScreen(
+            meetingId: mid,
+          ),
+        ),
+      );
     }
   }
 
-  Future<void> _joinMeetingAsAuthenticatedUser(String meetingId) async {
+  Future<void> _joinMeetingAsAuthenticatedUser(
+    String meetingId,
+  ) async {
     try {
-      final doc = await FirebaseFirestore.instance.collection('meetings').doc(meetingId).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('meetings')
+          .doc(meetingId)
+          .get();
+
       if (!mounted) return;
+
       if (!doc.exists) {
-        ElegantToast.show(context, title: 'Erreur', message: 'Réunion introuvable', type: ElegantToastType.error);
+        ElegantToast.show(
+          context,
+          title: 'Erreur',
+          message: 'Réunion introuvable',
+          type: ElegantToastType.error,
+        );
         return;
       }
+
       final data = doc.data();
+
       if (data == null) {
-        if (mounted) ElegantToast.show(context, title: 'Erreur', message: 'Données réunion corrompues', type: ElegantToastType.error);
+        if (mounted) {
+          ElegantToast.show(
+            context,
+            title: 'Erreur',
+            message: 'Données réunion corrompues',
+            type: ElegantToastType.error,
+          );
+        }
         return;
       }
+
       final current = FirebaseAuth.instance.currentUser;
+
       if (current == null) {
-        if (mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => GuestJoinScreen(meetingId: meetingId)));
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => GuestJoinScreen(
+                meetingId: meetingId,
+              ),
+            ),
+          );
+        }
         return;
       }
+
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -321,16 +467,29 @@ class _AuthWrapperState extends State<AuthWrapper> {
             meetingId: meetingId,
             meetingName: data['title'] as String? ?? 'Réunion',
             userId: current.uid,
-            userName: current.displayName ?? current.email ?? 'Invité',
+            userName: current.displayName ??
+                current.email ??
+                'Invité',
             userEmail: current.email,
             isHost: false,
           ),
         ),
       );
     } catch (e) {
-      crux.logger.e('_joinMeetingAsAuthenticatedUser error', error: e);
+      crux.logger.e(
+        '_joinMeetingAsAuthenticatedUser error',
+        error: e,
+      );
+
       if (mounted) {
-        Navigator.push(context, MaterialPageRoute(builder: (_) => GuestJoinScreen(meetingId: meetingId)));
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => GuestJoinScreen(
+              meetingId: meetingId,
+            ),
+          ),
+        );
       }
     }
   }
@@ -338,11 +497,19 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> _loadTerms() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+
       if (!mounted) return;
-      setState(() => _termsAccepted = prefs.getBool('crux_terms_accepted') ?? false);
+
+      setState(() {
+        _termsAccepted =
+            prefs.getBool('crux_terms_accepted') ?? false;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _termsAccepted = false);
+
+      setState(() {
+        _termsAccepted = false;
+      });
     }
   }
 
@@ -351,48 +518,75 @@ class _AuthWrapperState extends State<AuthWrapper> {
     if (_termsAccepted == null) {
       return const Scaffold(
         backgroundColor: Color(0xFF0A0A0F),
-        body: Center(child: CircularProgressIndicator(color: AppColors.primary, strokeWidth: 3)),
+        body: Center(
+          child: CircularProgressIndicator(
+            color: AppColors.primary,
+            strokeWidth: 3,
+          ),
+        ),
       );
     }
 
     return StreamBuilder<User?>(
       stream: _authStream,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState ==
+            ConnectionState.waiting) {
           return const Scaffold(
             backgroundColor: Color(0xFF0A0A0F),
-            body: Center(child: CircularProgressIndicator(color: AppColors.primary, strokeWidth: 3)),
+            body: Center(
+              child: CircularProgressIndicator(
+                color: AppColors.primary,
+                strokeWidth: 3,
+              ),
+            ),
           );
         }
 
         if (_pendingMeetingId != null) {
           final mid = _pendingMeetingId!;
+
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              setState(() => _pendingMeetingId = null);
-              final current = FirebaseAuth.instance.currentUser;
-              if (current != null && !current.isAnonymous) {
-                _joinMeetingAsAuthenticatedUser(mid);
-              } else {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => GuestJoinScreen(meetingId: mid)),
-                );
-              }
+            if (!mounted) return;
+
+            setState(() => _pendingMeetingId = null);
+
+            final current =
+                FirebaseAuth.instance.currentUser;
+
+            if (current != null && !current.isAnonymous) {
+              _joinMeetingAsAuthenticatedUser(mid);
+            } else {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => GuestJoinScreen(
+                    meetingId: mid,
+                  ),
+                ),
+              );
             }
           });
         }
 
         final user = snapshot.data;
-        if (user == null) return const LoginScreen();
+
+        if (user == null) {
+          return const LoginScreen();
+        }
 
         final userModel = UserModel(
           uid: user.uid,
-          name: user.displayName ?? user.email?.split('@')[0] ?? 'Utilisateur',
+          name: user.displayName ??
+              user.email?.split('@')[0] ??
+              'Utilisateur',
           email: user.email ?? '',
         );
 
-        if (_termsAccepted == true) return HomeScreen(user: userModel);
+        if (_termsAccepted == true) {
+          return HomeScreen(user: userModel);
+        }
+
         return ConsentScreen(user: userModel);
       },
     );
