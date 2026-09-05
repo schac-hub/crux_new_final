@@ -2,7 +2,8 @@ name: Deploy Flutter Web to GitHub Pages
 
 on:
   push:
-    branches: [ schac ]
+    branches:
+      - schac
   workflow_dispatch:
 
 permissions:
@@ -15,36 +16,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.32.8'
-        channel: 'stable'
-        cache: true
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.8'
+          channel: 'stable'
+          cache: true
 
-    - name: Get dependencies
-      run: flutter pub get
+      - name: Get dependencies
+        run: flutter pub get
 
-    - name: Analyze
-      run: flutter analyze
+      - name: Analyze
+        run: flutter analyze
 
-    - name: Build web app
-      run: |
-        flutter build web --release \
-          --base-href /crux_new_final/ \
-          --dart-define=LIVEKIT_WSS_URL="wss://crux-88fihb12.livekit.cloud" \
-          --dart-define=LIVEKIT_TOKEN_SERVER_URL="https://crux-6l6num.sandbox.livekit.io" \
-          --dart-define=FIREBASE_PROJECT_ID="crux-3c6be"
+      - name: Build web app
+        run: |
+          flutter build web --release \
+            --base-href /crux_new_final/ \
+            --dart-define=LIVEKIT_WSS_URL="wss://crux-88fihb12.livekit.cloud" \
+            --dart-define=LIVEKIT_TOKEN_SERVER_URL="https://cloud-api.livekit.io/api/sandbox/connection-details" \
+            --dart-define=LIVEKIT_SANDBOX_ID="crux-6l6num" \
+            --dart-define=FIREBASE_PROJECT_ID="crux-3c6be"
 
-    - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./build/web
-        publish_branch: gh-pages
-        user_name: 'github-actions[bot]'
-        user_email: 'github-actions[bot]@users.noreply.github.com'
-        commit_message: 'Deploy Flutter web to GitHub Pages'
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build/web
+          publish_branch: gh-pages
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy CRUX Web'
