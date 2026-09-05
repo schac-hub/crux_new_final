@@ -9,20 +9,24 @@ import 'meeting_screen.dart';
 import 'large_conference_screen.dart';
 
 /// Écran de création d'une réunion (standard ou grande conférence).
-/// Appelé depuis HomeScreen : `CreateMeetingScreen()` ou
-/// `CreateMeetingScreen(largeConference: true)`.
 class CreateMeetingScreen extends StatefulWidget {
   final bool largeConference;
 
-  const CreateMeetingScreen({super.key, this.largeConference = false});
+  const CreateMeetingScreen({
+    super.key,
+    this.largeConference = false,
+  });
 
   @override
-  State<CreateMeetingScreen> createState() => _CreateMeetingScreenState();
+  State<CreateMeetingScreen> createState() =>
+      _CreateMeetingScreenState();
 }
 
-class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
+class _CreateMeetingScreenState
+    extends State<CreateMeetingScreen> {
   final _titleCtrl = TextEditingController();
   final _passcodeCtrl = TextEditingController();
+
   bool _showPasscode = false;
   bool _loading = false;
   String? _error;
@@ -36,33 +40,55 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
 
   String _displayName() {
     final fb = FirebaseAuth.instance.currentUser;
-    if (fb?.displayName?.trim().isNotEmpty == true) return fb!.displayName!;
-    if (fb?.email?.isNotEmpty == true && fb!.email!.contains('@')) {
+
+    if (fb?.displayName?.trim().isNotEmpty == true) {
+      return fb!.displayName!;
+    }
+
+    if (fb?.email?.isNotEmpty == true &&
+        fb!.email!.contains('@')) {
       return fb.email!.split('@')[0];
     }
+
     return 'Utilisateur';
   }
 
   Future<void> _create() async {
     final title = _titleCtrl.text.trim();
+
     if (title.isEmpty) {
-      setState(() => _error = 'Donne un titre à ta réunion');
+      setState(() {
+        _error = 'Donne un titre à ta réunion';
+      });
       return;
     }
+
     final passcode = _passcodeCtrl.text.trim();
-    if (passcode.isNotEmpty && (passcode.length < 4 || passcode.length > 6)) {
-      setState(() => _error = 'Le code d\'accès doit faire 4 à 6 chiffres');
+
+    if (passcode.isNotEmpty &&
+        (passcode.length < 4 || passcode.length > 6)) {
+      setState(() {
+        _error =
+            'Le code d\'accès doit faire 4 à 6 chiffres';
+      });
       return;
     }
-    if (passcode.isNotEmpty && !RegExp(r'^\d+$').hasMatch(passcode)) {
-      setState(
-          () => _error = 'Le code d\'accès ne doit contenir que des chiffres');
+
+    if (passcode.isNotEmpty &&
+        !RegExp(r'^\d+$').hasMatch(passcode)) {
+      setState(() {
+        _error =
+            'Le code d\'accès ne doit contenir que des chiffres';
+      });
       return;
     }
 
     final current = FirebaseAuth.instance.currentUser;
+
     if (current == null) {
-      setState(() => _error = 'Session expirée, reconnecte-toi');
+      setState(() {
+        _error = 'Session expirée, reconnecte-toi';
+      });
       return;
     }
 
@@ -72,16 +98,20 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
     });
 
     try {
-      // Create meeting directly via Firestore (backend removed to avoid failures)
-      final meetingId = await MeetingService().createMeeting(
+      final meetingId =
+          await MeetingService().createMeeting(
         title: title,
         description: '',
         organizerName: _displayName(),
         organizerId: current.uid,
-        passcode: passcode.isNotEmpty ? passcode : null,
+        passcode:
+            passcode.isNotEmpty ? passcode : null,
         isLargeConference: widget.largeConference,
       );
-      logger.i('✅ Réunion créée via direct Firestore: $meetingId');
+
+      logger.i(
+        '✅ Réunion créée via direct Firestore: $meetingId',
+      );
 
       if (!mounted) return;
 
@@ -115,11 +145,16 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
         );
       }
     } catch (e) {
-      logger.e('CreateMeetingScreen._create error', error: e);
+      logger.e(
+        'CreateMeetingScreen._create error',
+        error: e,
+      );
+
       if (mounted) {
         setState(() {
           _loading = false;
-          _error = 'Impossible de créer la réunion. Réessaie.';
+          _error =
+              'Impossible de créer la réunion. Réessaie.';
         });
       }
     }
@@ -133,14 +168,21 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: Text(
-          widget.largeConference ? 'Grande conférence' : 'Nouvelle réunion',
+          widget.largeConference
+              ? 'Grande conférence'
+              : 'Nouvelle réunion',
           style: GoogleFonts.poppins(
-              color: Colors.white, fontWeight: FontWeight.w600),
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          padding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 16,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -152,7 +194,9 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
                   borderRadius: BorderRadius.circular(18),
                 ),
                 child: Icon(
-                  widget.largeConference ? Icons.groups : Icons.video_call,
+                  widget.largeConference
+                      ? Icons.groups
+                      : Icons.video_call,
                   color: Colors.white,
                   size: 32,
                 ),
@@ -161,9 +205,10 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
               Text(
                 'Titre de la réunion',
                 style: GoogleFonts.poppins(
-                    color: Colors.white70,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600),
+                  color: Colors.white70,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(height: 8),
               TextField(
@@ -171,20 +216,30 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
                 style: const TextStyle(color: Colors.white),
                 decoration: InputDecoration(
                   hintText: 'Ex. Point d\'équipe hebdo',
-                  hintStyle: const TextStyle(color: Colors.white38),
+                  hintStyle:
+                      const TextStyle(color: Colors.white38),
                   filled: true,
                   fillColor: AppColors.surfaceVariant,
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: const BorderSide(color: AppColors.border),
+                    borderRadius:
+                        BorderRadius.circular(14),
+                    borderSide: const BorderSide(
+                      color: AppColors.border,
+                    ),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: const BorderSide(color: AppColors.border),
+                    borderRadius:
+                        BorderRadius.circular(14),
+                    borderSide: const BorderSide(
+                      color: AppColors.border,
+                    ),
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: const BorderSide(color: AppColors.primary),
+                    borderRadius:
+                        BorderRadius.circular(14),
+                    borderSide: const BorderSide(
+                      color: AppColors.primary,
+                    ),
                   ),
                 ),
               ),
@@ -193,10 +248,15 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
                 contentPadding: EdgeInsets.zero,
                 activeTrackColor: AppColors.primary,
                 value: _showPasscode,
-                onChanged: (v) => setState(() => _showPasscode = v),
+                onChanged: (v) {
+                  setState(() => _showPasscode = v);
+                },
                 title: Text(
                   'Protéger avec un code d\'accès',
-                  style: GoogleFonts.poppins(color: Colors.white, fontSize: 14),
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontSize: 14,
+                  ),
                 ),
               ),
               if (_showPasscode) ...[
@@ -205,29 +265,46 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
                   controller: _passcodeCtrl,
                   keyboardType: TextInputType.number,
                   maxLength: 6,
-                  style: const TextStyle(color: Colors.white, letterSpacing: 4),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    letterSpacing: 4,
+                  ),
                   decoration: InputDecoration(
                     hintText: '4 à 6 chiffres',
-                    hintStyle: const TextStyle(color: Colors.white38),
-                    counterStyle: const TextStyle(color: Colors.white38),
+                    hintStyle: const TextStyle(
+                      color: Colors.white38,
+                    ),
+                    counterStyle: const TextStyle(
+                      color: Colors.white38,
+                    ),
                     filled: true,
-                    fillColor: AppColors.surfaceVariant,
+                    fillColor:
+                        AppColors.surfaceVariant,
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: const BorderSide(color: AppColors.border),
+                      borderRadius:
+                          BorderRadius.circular(14),
+                      borderSide: const BorderSide(
+                        color: AppColors.border,
+                      ),
                     ),
                   ),
                 ),
               ],
               if (_error != null) ...[
                 const SizedBox(height: 16),
-                Text(_error!,
-                    style:
-                        const TextStyle(color: AppColors.error, fontSize: 13)),
+                Text(
+                  _error!,
+                  style: const TextStyle(
+                    color: AppColors.error,
+                    fontSize: 13,
+                  ),
+                ),
               ],
               const SizedBox(height: 28),
               CustomButton(
-                label: _loading ? 'Création…' : 'Démarrer la réunion',
+                label: _loading
+                    ? 'Création…'
+                    : 'Démarrer la réunion',
                 isLoading: _loading,
                 onPressed: _loading ? () {} : _create,
               ),
