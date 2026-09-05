@@ -23,55 +23,59 @@ class AppConfig {
   // LIVEKIT
   // ===========================================================================
 
-  /// URL WebSocket LiveKit Cloud.
+  /// URL LiveKit par défaut.
   ///
-  /// IMPORTANT :
-  /// Cette valeur ne doit PAS être le endpoint HTTP du token server.
-  static const String livekitWssUrl = String.fromEnvironment(
+  /// Le serveur sandbox peut toutefois retourner l'URL LiveKit réellement
+  /// associée au sandbox. Celle-ci est alors utilisée dynamiquement.
+  static const String livekitDefaultWssUrl = String.fromEnvironment(
     'LIVEKIT_WSS_URL',
     defaultValue: 'wss://crux-88fihb12.livekit.cloud',
   );
 
-  /// Endpoint HTTP/HTTPS du serveur qui génère les tokens LiveKit.
-  ///
-  /// Le workflow actuel de CRUX utilise LIVEKIT_TOKEN_SERVER_URL.
-  ///
-  /// On accepte également LIVEKIT_TOKEN_ENDPOINT afin de rester
-  /// compatible avec les anciennes configurations.
+  static String _runtimeLivekitWssUrl = livekitDefaultWssUrl;
+
+  /// URL WebSocket LiveKit réellement utilisée par l'application.
+  static String get livekitWssUrl => _runtimeLivekitWssUrl;
+
+  /// Permet au LiveKitService d'utiliser le serverUrl retourné par le sandbox.
+  static void setLivekitWssUrl(String? serverUrl) {
+    final value = serverUrl?.trim();
+
+    if (value == null || value.isEmpty) {
+      _runtimeLivekitWssUrl = livekitDefaultWssUrl;
+      return;
+    }
+
+    _runtimeLivekitWssUrl = value;
+  }
+
+  /// Endpoint officiel du token server sandbox LiveKit.
   static const String livekitTokenEndpoint = String.fromEnvironment(
     'LIVEKIT_TOKEN_SERVER_URL',
-    defaultValue: String.fromEnvironment(
-      'LIVEKIT_TOKEN_ENDPOINT',
-      defaultValue: 'https://crux-new-final.onrender.com',
-    ),
+    defaultValue:
+        'https://cloud-api.livekit.io/api/sandbox/connection-details',
+  );
+
+  /// Identifiant du sandbox LiveKit.
+  static const String livekitSandboxId = String.fromEnvironment(
+    'LIVEKIT_SANDBOX_ID',
+    defaultValue: 'crux-6l6num',
   );
 
   // ===========================================================================
   // LARGE CONFERENCE / WEBINAR
   // ===========================================================================
 
-  /// Objectif d'audience CRUX.
-  ///
-  /// Cette constante représente la capacité visée par l'architecture
-  /// applicative. La capacité réelle dépend du cluster LiveKit utilisé.
   static const int webinarMinimumParticipants = 10000;
 
-  /// Capacité maximale cible configurée côté application.
   static const int maxParticipantsLarge = 8000;
 
-  /// Nombre de vidéos réellement rendues simultanément.
-  ///
-  /// Même avec 5 000 participants dans la room, le navigateur ne doit
-  /// jamais essayer d'afficher 5 000 flux vidéo.
   static const int maxVisibleVideoTiles = 10;
 
-  /// Alias conservé pour les autres écrans CRUX.
   static const int livekitVisibleTileCap = 10;
 
-  /// Nombre maximum de personnes considérées comme speakers/stage.
   static const int maxStageParticipants = 10;
 
-  /// Nombre de messages conservés localement.
   static const int maxLocalChatMessages = 200;
 
   // ===========================================================================
@@ -162,7 +166,8 @@ class AppConfig {
 
   static bool get isLiveKitConfigured {
     return livekitWssUrl.startsWith('wss://') &&
-        livekitTokenEndpoint.startsWith('http');
+        livekitTokenEndpoint.startsWith('http') &&
+        livekitSandboxId.isNotEmpty;
   }
 
   static String get configDiagnostics {
@@ -172,8 +177,14 @@ CRUX LiveKit configuration
 WSS:
 $livekitWssUrl
 
+Default WSS:
+$livekitDefaultWssUrl
+
 Token endpoint:
 $livekitTokenEndpoint
+
+Sandbox ID:
+$livekitSandboxId
 
 Webinar target:
 $webinarMinimumParticipants
