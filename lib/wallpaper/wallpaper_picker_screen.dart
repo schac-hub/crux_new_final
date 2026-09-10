@@ -52,11 +52,22 @@ class _WallpaperPickerScreenState extends State<WallpaperPickerScreen> {
     try {
       final picked = await _picker.pickImage(
         source: ImageSource.gallery,
-        maxWidth: 2400,
-        imageQuality: 92,
+        maxWidth: 1920,
+        imageQuality: 85,
       );
       if (picked == null) return;
-      await _provider.importAndApply(picked.path);
+
+      // readAsBytes() fonctionne sur web (blob:) comme en natif : plus de
+      // chemin de fichier, donc plus de MissingPluginException sur web.
+      final bytes = await picked.readAsBytes();
+      if (bytes.isEmpty) throw Exception('Image illisible');
+
+      final name = picked.name;
+      final ext = name.contains('.')
+          ? name.split('.').last.toLowerCase()
+          : 'jpg';
+
+      await _provider.importAndApplyBytes(bytes, ext: ext);
       _applied = true;
     } catch (e) {
       if (mounted) _snack('Import impossible : $e');

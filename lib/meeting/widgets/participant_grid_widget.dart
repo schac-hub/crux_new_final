@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:livekit_client/livekit_client.dart';
 import '../../theme/colors.dart';
+import '../../widgets/participant_avatar.dart';
 import '../entities/participant_display.dart';
 
 class ParticipantGridWidget extends StatelessWidget {
@@ -93,18 +94,10 @@ class ParticipantGridWidget extends StatelessWidget {
   }
 
   Widget _buildAvatarPlaceholder(ParticipantDisplayState participant) {
-    return Container(
-      color: AppColors.surfaceVariant,
-      child: Center(
-        child: Text(
-          participant.initials,
-          style: const TextStyle(
-            fontSize: 32,
-            fontWeight: FontWeight.bold,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ),
+    return ParticipantAvatar(
+      identity: participant.participant.identity,
+      initials: participant.initials,
+      fontSize: 32,
     );
   }
 

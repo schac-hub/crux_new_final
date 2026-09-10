@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import '../wallpaper/wallpaper_config.dart';
@@ -22,11 +24,34 @@ class WallpaperProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Importe l'image choisie dans le stockage interne, puis l'applique et
-  /// la persiste immédiatement comme fond d'écran courant.
-  Future<void> importAndApply(String sourcePath) async {
-    final path = await WallpaperManager().importImage(sourcePath);
-    await apply(_config.copyWith(imagePath: path));
+  /// Importe l'image choisie (octets, compatibles web + natif), puis
+  /// l'applique et la persiste immédiatement comme fond courant.
+  ///
+  /// En natif, un fichier stable est écrit et référencé par chemin ;
+  /// sur web, l'image est encodée en base64 dans la configuration
+  /// (localStorage) puisqu'il n'y a pas de système de fichiers.
+  Future<void> importAndApplyBytes(
+    Uint8List bytes, {
+    String ext = 'jpg',
+  }) async {
+    final imagePath = await WallpaperManager().importImageBytes(
+      bytes,
+      ext: ext,
+    );
+    final nextConfig = imagePath != null
+        ? WallpaperConfig(
+            imagePath: imagePath,
+            blurRadius: _config.blurRadius,
+            progressiveBlur: _config.progressiveBlur,
+            scrim: _config.scrim,
+          )
+        : WallpaperConfig(
+            imageBase64: base64Encode(bytes),
+            blurRadius: _config.blurRadius,
+            progressiveBlur: _config.progressiveBlur,
+            scrim: _config.scrim,
+          );
+    await apply(nextConfig);
   }
 
   /// Persiste la configuration donnée comme fond d'écran courant.

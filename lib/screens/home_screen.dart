@@ -3,7 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../utils/local_file.dart';
+import 'dart:typed_data';
 
 import '../models/user_model.dart';
 import '../services/meeting_service.dart';
@@ -29,7 +29,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final _schedule = ScheduleService();
   final _codeCtrl = TextEditingController();
   int _selectedNav = 0;
-  String? _localPhotoPath;
+
+  /// Photo de profil (octets) : cache local puis Firestore, web + natif.
+  Uint8List? _photoBytes;
 
   String get _uid =>
       widget.user.uid.isNotEmpty
@@ -47,12 +49,35 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_uid.isNotEmpty) _schedule.resyncReminders(userId: _uid);
     });
-    _loadLocalPhoto();
+    _loadProfilePhoto();
   }
 
-  Future<void> _loadLocalPhoto() async {
-    final path = await UserService.instance.getLocalPhotoPath();
-    if (mounted) setState(() => _localPhotoPath = path);
+  /// Charge la photo de profil : cache local d'abord (instantané), puis
+  /// Firestore pour rester synchronisé entre appareils.
+  Future<void> _loadProfilePhoto() async {
+    final uid = _uid;
+
+    final cached = await UserService.instance.getCachedPhotoBase64();
+    final cachedBytes = UserService.decodePhoto(cached);
+    if (mounted && cachedBytes != null && _photoBytes == null) {
+      setState(() => _photoBytes = cachedBytes);
+    }
+
+    if (uid.isEmpty) return;
+    try {
+      final profile = await UserService.instance.getProfile(uid);
+      final remoteBytes = UserService.decodePhoto(
+        profile?['photoBase64'] as String?,
+      );
+      if (remoteBytes != null) {
+        await UserService.instance.setCachedPhotoBase64(
+          profile!['photoBase64'] as String,
+        );
+      }
+      if (mounted) setState(() => _photoBytes = remoteBytes);
+    } catch (_) {
+      // Hors-ligne : on garde le cache local.
+    }
   }
 
   @override
@@ -419,19 +444,19 @@ class _HomeScreenState extends State<HomeScreen> {
       case 1: // Meetings
         Navigator.of(
           context,
-        ).pushNamed(AppRoutes.schedule).then((_) => _loadLocalPhoto());
+        ).pushNamed(AppRoutes.schedule).then((_) => _loadProfilePhoto());
         setState(() => _selectedNav = 0);
         break;
       case 2: // Settings
         Navigator.of(
           context,
-        ).pushNamed(AppRoutes.settings).then((_) => _loadLocalPhoto());
+        ).pushNamed(AppRoutes.settings).then((_) => _loadProfilePhoto());
         setState(() => _selectedNav = 0);
         break;
       case 3: // Profile
         Navigator.of(
           context,
-        ).pushNamed(AppRoutes.profile).then((_) => _loadLocalPhoto());
+        ).pushNamed(AppRoutes.profile).then((_) => _loadProfilePhoto());
         setState(() => _selectedNav = 0);
         break;
     }
@@ -688,10 +713,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 .toUpperCase();
 
     Widget avatar;
-    if (localFileExists(_localPhotoPath ?? '')) {
+    if (_photoBytes != null) {
       avatar = CircleAvatar(
         radius: 24,
-        backgroundImage: localFileImage(_localPhotoPath!)!,
+        backgroundImage: MemoryImage(_photoBytes!),
       );
     } else {
       avatar = CircleAvatar(

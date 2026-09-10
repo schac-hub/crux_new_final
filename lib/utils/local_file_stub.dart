@@ -6,6 +6,8 @@ bool localFileExists(String path) => false;
 
 Future<void> copyLocalFile(String from, String to) async {}
 
+Future<void> writeLocalFileBytes(String path, List<int> bytes) async {}
+
 Future<void> deleteLocalFile(String path) async {}
 
 Future<bool> localDirExists(String path) async => false;

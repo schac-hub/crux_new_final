@@ -10,6 +10,10 @@ Future<void> copyLocalFile(String from, String to) async {
   await File(from).copy(to);
 }
 
+Future<void> writeLocalFileBytes(String path, List<int> bytes) async {
+  await File(path).writeAsBytes(bytes, flush: true);
+}
+
 Future<void> deleteLocalFile(String path) async {
   try {
     await File(path).delete();

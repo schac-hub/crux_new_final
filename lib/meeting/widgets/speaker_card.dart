@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:livekit_client/livekit_client.dart';
 import '../../theme/colors.dart';
+import '../../widgets/participant_avatar.dart';
 import '../entities/participant_display.dart';
 
 class SpeakerCard extends StatelessWidget {
@@ -76,18 +77,10 @@ class SpeakerCard extends StatelessWidget {
   }
 
   Widget _buildAvatarPlaceholder() {
-    return Container(
-      color: AppColors.surfaceVariant,
-      child: Center(
-        child: Text(
-          participantState.initials,
-          style: const TextStyle(
-            fontSize: 48,
-            fontWeight: FontWeight.bold,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ),
+    return ParticipantAvatar(
+      identity: participantState.participant.identity,
+      initials: participantState.initials,
+      fontSize: 48,
     );
   }
 

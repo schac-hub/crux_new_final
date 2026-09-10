@@ -24,23 +24,19 @@ class PrivacyPolicyScreen extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        flexibleSpace: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFFE74C3C), Color(0xFF8E44AD)],
-            ),
-          ),
-        ),
         title: Text(
           title,
           style: GoogleFonts.poppins(
             fontSize: 18,
             fontWeight: FontWeight.w700,
-            color: Colors.white,
+            color: isDark ? Colors.white : AppColors.textPrimary,
           ),
         ),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
+          icon: Icon(
+            Icons.arrow_back_ios,
+            color: isDark ? Colors.white : AppColors.textPrimary,
+          ),
           onPressed: () => Navigator.pop(context),
         ),
       ),
@@ -187,23 +183,25 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Carte sobre, alignée sur le style des sections (pas de dégradé criard).
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFE74C3C), Color(0xFF8E44AD)],
-        ),
+        color: isDark ? const Color(0xFF1A1A1A) : Colors.white,
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark ? Colors.white12 : const Color(0xFFE5E7EB),
+        ),
       ),
       child: Column(
         children: [
-          Icon(icon, color: Colors.white, size: 48),
+          Icon(icon, color: AppColors.primary, size: 48),
           const SizedBox(height: 12),
           Text(
             title,
             style: GoogleFonts.poppins(
-              color: Colors.white,
+              color: isDark ? Colors.white : AppColors.textPrimary,
               fontSize: 20,
               fontWeight: FontWeight.w800,
             ),

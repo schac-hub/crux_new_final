@@ -9,6 +9,7 @@ class UserService {
 
   final _db = FirebaseFirestore.instance;
   static const _localPhotoKey = 'crux_local_photo_path';
+  static const _cachedPhotoKey = 'crux_photo_b64';
 
   /// Write name and/or photo to the shared Firestore users collection.
   Future<void> saveProfile({
@@ -55,6 +56,23 @@ class UserService {
   Future<void> removeLocalPhotoPath() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_localPhotoKey);
+  }
+
+  /// Cache local de la photo en base64 (SharedPreferences) : affichage
+  /// instantané hors-ligne sur web comme en natif, sans système de fichiers.
+  Future<String?> getCachedPhotoBase64() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_cachedPhotoKey);
+  }
+
+  Future<void> setCachedPhotoBase64(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_cachedPhotoKey, value);
+  }
+
+  Future<void> clearCachedPhotoBase64() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_cachedPhotoKey);
   }
 
   /// Decode a base64 photo string to raw bytes (returns null on failure).

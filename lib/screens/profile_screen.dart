@@ -1,5 +1,4 @@
 import 'dart:convert';
-import '../utils/local_file.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -7,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+
+import '../services/participant_photo_cache.dart';
+import '../utils/local_file.dart';
 
 import '../l10n/app_translations.dart';
 import '../providers/locale_provider.dart';
@@ -36,7 +37,10 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _isUpdatingPhoto = false;
   bool _isSavingName = false;
   int _meetingsHosted = 0;
-  String? _localPhotoPath;
+
+  /// Photo affichée, résolue depuis le cache local puis Firestore
+  /// (octets → fonctionne à l'identique sur web et en natif).
+  Uint8List? _photoBytes;
 
   @override
   void initState() {
@@ -57,9 +61,28 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _loadAll() async {
-    final path = await UserService.instance.getLocalPhotoPath();
     final uid = _auth.currentUser?.uid;
-    if (mounted) setState(() => _localPhotoPath = path);
+
+    // Photo : cache local d'abord (instantané, hors-ligne), puis Firestore
+    // (source de vérité, synchronise les autres appareils).
+    final cached = await UserService.instance.getCachedPhotoBase64();
+    final cachedBytes = UserService.decodePhoto(cached);
+    if (mounted && cachedBytes != null) setState(() => _photoBytes = cachedBytes);
+
+    if (uid != null) {
+      try {
+        final profile = await UserService.instance.getProfile(uid);
+        final remote = profile?['photoBase64'] as String?;
+        final remoteBytes = UserService.decodePhoto(remote);
+        if (remoteBytes != null) {
+          await UserService.instance.setCachedPhotoBase64(remote!);
+        }
+        if (mounted) setState(() => _photoBytes = remoteBytes);
+      } catch (_) {
+        // Hors-ligne : on garde le cache local.
+      }
+    }
+
     if (uid == null) return;
     try {
       final snap =
@@ -82,16 +105,18 @@ class _ProfileScreenState extends State<ProfileScreen>
       if (picked == null) return;
       setState(() => _isUpdatingPhoto = true);
 
-      final appDir = await _getAppDocDir();
-      await createLocalDir(appDir);
+      // readAsBytes() fonctionne sur web (blob:) comme en natif : plus de
+      // copie de fichier ni de path_provider, donc plus de crash web.
+      final bytes = await picked.readAsBytes();
+      if (bytes.isEmpty) throw Exception('Image illisible');
+      final b64 = base64Encode(bytes);
 
-      final dest = '$appDir/profile_photo.jpg';
-      await copyLocalFile(picked.path, dest);
-      await UserService.instance.setLocalPhotoPath(dest);
+      // 1. Cache local : affichage immédiat, hors-ligne, web + natif.
+      await UserService.instance.setCachedPhotoBase64(b64);
 
       if (mounted) {
         setState(() {
-          _localPhotoPath = dest;
+          _photoBytes = bytes;
           _isUpdatingPhoto = false;
         });
         _snack(
@@ -102,14 +127,15 @@ class _ProfileScreenState extends State<ProfileScreen>
         );
       }
 
+      // 2. Firestore : source de vérité (autres appareils, réunions).
       final uid = _auth.currentUser?.uid;
       if (uid != null) {
-        final bytes = await readLocalFileBytes(picked.path);
-        final b64 = bytes != null ? base64Encode(bytes) : null;
-        if (b64 == null) return;
-        UserService.instance
-            .saveProfile(uid: uid, photoBase64: b64)
-            .catchError((_) {});
+        try {
+          await UserService.instance.saveProfile(uid: uid, photoBase64: b64);
+          ParticipantPhotoCache.invalidate(uid);
+        } catch (_) {
+          // Hors-ligne : le cache local garde la photo.
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -119,20 +145,21 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-  Future<String> _getAppDocDir() async {
-    final dir = await getApplicationDocumentsDirectory();
-    return dir.path;
-  }
-
   Future<void> _removePhoto() async {
-    await UserService.instance.removeLocalPhotoPath();
-    if (_localPhotoPath != null) {
+    await UserService.instance.clearCachedPhotoBase64();
+
+    // Nettoyage des anciens stockages fichier (migration natif).
+    final legacyPath = await UserService.instance.getLocalPhotoPath();
+    if (legacyPath != null) {
+      await UserService.instance.removeLocalPhotoPath();
       try {
-        await deleteLocalFile(_localPhotoPath!);
+        await deleteLocalFile(legacyPath);
       } catch (_) {}
     }
+
     final uid = _auth.currentUser?.uid;
     if (uid != null) {
+      ParticipantPhotoCache.invalidate(uid);
       _db
           .collection('users')
           .doc(uid)
@@ -140,7 +167,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           .catchError((_) {});
     }
     if (mounted) {
-      setState(() => _localPhotoPath = null);
+      setState(() => _photoBytes = null);
       _snack(
         AppTranslations.t(
           'photo_removed_ok',
@@ -199,7 +226,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                     _pickPhoto(ImageSource.camera);
                   },
                 ),
-                if (_localPhotoPath != null)
+                if (_photoBytes != null)
                   _SheetTile(
                     icon: Icons.delete_outline,
                     label: AppTranslations.t('remove_photo', lang),
@@ -680,8 +707,8 @@ class _ProfileScreenState extends State<ProfileScreen>
           ),
         ),
       );
-    } else if (localFileExists(_localPhotoPath ?? '')) {
-      photo = Image(image: localFileImage(_localPhotoPath!)!, fit: BoxFit.cover);
+    } else if (_photoBytes != null) {
+      photo = Image.memory(_photoBytes!, fit: BoxFit.cover);
     } else {
       photo = Container(
         color: AppColors.surfaceElevated,
@@ -711,7 +738,6 @@ class _ProfileScreenState extends State<ProfileScreen>
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(color: AppColors.borderFocused, width: 2),
-              boxShadow: AppColors.glowShadow,
             ),
             child: ClipOval(child: photo),
           ),

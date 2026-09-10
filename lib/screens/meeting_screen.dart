@@ -412,25 +412,34 @@ class _MeetingScreenState extends State<MeetingScreen> {
   }
 
   Widget _buildContent() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildHeader(),
-          const SizedBox(height: 32),
-          _buildMeetingCard(),
-          const Spacer(),
-          _buildStartButton(),
-          const SizedBox(height: 12),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text(
-              'Annuler',
-              style: TextStyle(color: AppColors.textTertiary),
-            ),
+    // Scrollable + largeur bornée : sur grand écran web la carte ne pousse
+    // plus le bouton hors champ (l'ancien Spacer débordait), et sur petit
+    // écran il suffit de faire défiler.
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildHeader(),
+              const SizedBox(height: 32),
+              _buildMeetingCard(),
+              const SizedBox(height: 32),
+              _buildStartButton(),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Annuler',
+                  style: TextStyle(color: AppColors.textTertiary),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

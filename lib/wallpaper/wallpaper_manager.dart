@@ -1,5 +1,8 @@
 import '../utils/local_file.dart';
 
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -44,7 +47,10 @@ class WallpaperManager {
       final config = WallpaperConfig.fromJsonString(json);
       // L'image a pu être supprimée par le système : on ne référence jamais
       // un fichier absent (sinon le rendu jette une exception au build).
-      if (config.hasImage && !localFileExists(config.imagePath!)) {
+      // Sur web, localFileExists est toujours false : seule la base64 compte.
+      if (config.hasFileImage &&
+          !localFileExists(config.imagePath!) &&
+          !config.hasBase64Image) {
         return WallpaperConfig.defaultConfig;
       }
       return config;
@@ -65,21 +71,22 @@ class WallpaperManager {
     return path;
   }
 
-  /// Copie l'image sélectionnée dans le stockage interne et renvoie le chemin
-  /// stable. Indispensable : l'URI renvoyée par le Photo Picker expire à la
-  /// fin du processus.
-  Future<String> importImage(String sourcePath) async {
+  /// Importe l'image sélectionnée depuis ses octets (XFile.readAsBytes —
+  /// fonctionne sur web comme en natif).
+  ///
+  /// En natif : écrit un fichier stable dans le stockage interne (l'URI du
+  /// picker expire en fin de processus) et renvoie son chemin.
+  /// Sur web : renvoie null — pas de système de fichiers, l'appelant
+  /// persiste alors l'image en base64 dans la configuration.
+  Future<String?> importImageBytes(Uint8List bytes, {String ext = 'jpg'}) async {
+    if (kIsWeb) return null;
+
     final dirPath = await _wallpaperDirPath();
 
-    var extension =
-        sourcePath.contains('.')
-            ? sourcePath.split('.').last.toLowerCase()
-            : 'jpg';
-    if (extension.length > 5) extension = 'jpg';
-
+    if (ext.length > 5) ext = 'jpg';
     final target =
-        '$dirPath/wallpaper_${DateTime.now().millisecondsSinceEpoch}.$extension';
-    await copyLocalFile(sourcePath, target);
+        '$dirPath/wallpaper_${DateTime.now().millisecondsSinceEpoch}.$ext';
+    await writeLocalFileBytes(target, bytes);
 
     // Nettoyage des anciens fonds pour ne pas remplir le stockage.
     await for (final entityPath in listLocalDirPaths(dirPath)) {
@@ -97,11 +104,13 @@ class WallpaperManager {
 
   Future<void> reset() async {
     await init();
-    try {
-      final dirPath = await _wallpaperDirPath();
-      await deleteLocalDir(dirPath);
-    } catch (_) {
-      // Rien à supprimer.
+    if (!kIsWeb) {
+      try {
+        final dirPath = await _wallpaperDirPath();
+        await deleteLocalDir(dirPath);
+      } catch (_) {
+        // Rien à supprimer.
+      }
     }
     await _prefs!.remove(_prefsKey);
   }
