@@ -2192,7 +2192,10 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       final local = _room?.localParticipant;
 
       if (local != null) {
-        await local.setMetadata(
+        // setMetadata renvoie void (livekit_client <= 2.6.x) ou Future<void>
+        // (>= 2.7) selon la version résolue : pas de await, compatible avec
+        // les deux signatures.
+        local.setMetadata(
           jsonEncode({'hand_raised': next, 'name': widget.userName}),
         );
       }
