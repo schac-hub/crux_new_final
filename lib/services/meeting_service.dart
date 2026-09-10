@@ -66,7 +66,10 @@ class MeetingService {
   // CREATE IMMEDIATE MEETING
   // ---------------------------------------------------------------------------
 
-  Future<String> createMeeting({
+  /// Crée une réunion immédiate et retourne le modèle complet
+  /// (id + meetingCode XXX-XXX-XXX + passcode) pour naviguer sans
+  /// re-lire le document dans Firestore.
+  Future<MeetingModel> createMeeting({
     required String title,
     required String description,
     required String organizerName,
@@ -183,7 +186,7 @@ class MeetingService {
         rethrow;
       }
 
-      return meetingId;
+      return meeting;
     } on FirebaseAuthException catch (e) {
       _log.e('Firebase Auth error: ${e.code}');
       throw Exception('auth_failed: ${e.code}');

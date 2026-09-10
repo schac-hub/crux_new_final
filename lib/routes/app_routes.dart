@@ -9,6 +9,7 @@ import '../screens/signup_screen.dart';
 import '../screens/privacy_policy_screen.dart';
 import '../screens/terms_screen.dart';
 import '../screens/profile_screen.dart';
+import '../screens/pro_screen.dart';
 import '../models/user_model.dart';
 import '../wallpaper/wallpaper_picker_screen.dart';
 
@@ -28,6 +29,7 @@ class AppRoutes {
   static const String terms = '/terms';
   static const String profile = '/profile';
   static const String wallpaper = '/wallpaper';
+  static const String pro = '/pro';
 
   static Route<dynamic> generateRoute(RouteSettings routeSettings) {
     switch (routeSettings.name) {
@@ -90,6 +92,9 @@ class AppRoutes {
 
       case wallpaper:
         return MaterialPageRoute(builder: (_) => const WallpaperPickerScreen());
+
+      case pro:
+        return MaterialPageRoute(builder: (_) => const ProScreen());
 
       default:
         return MaterialPageRoute(builder: (_) => const SplashScreen());

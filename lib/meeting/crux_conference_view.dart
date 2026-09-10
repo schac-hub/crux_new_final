@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:livekit_client/livekit_client.dart';
 import 'package:provider/provider.dart';
 import '../providers/meeting_state_provider.dart';
 import 'entities/speaker_state.dart';
 import 'entities/participant_display.dart';
 import 'layout/conference_layout_engine.dart';
+import 'reaction_bus.dart';
 import 'widgets/speaker_card.dart';
 import 'widgets/live_feed_item.dart';
 import 'widgets/network_stats_overlay.dart';
@@ -14,7 +18,21 @@ import '../theme/colors.dart';
 import '../theme/conference_theme.dart';
 
 class CruxConferenceView extends StatefulWidget {
-  const CruxConferenceView({super.key});
+  /// Affiche la barre de contrôles + le sélecteur de réactions embarqués.
+  ///
+  /// À désactiver lorsque la vue est intégrée dans un écran qui pilote
+  /// déjà LiveKit et fournit ses propres contrôles
+  /// (ex. LargeConferenceScreen), sinon deux barres se superposent.
+  final bool showOverlayControls;
+
+  /// Affiche l'overlay de statistiques réseau (fps, latence…).
+  final bool showNetworkStats;
+
+  const CruxConferenceView({
+    super.key,
+    this.showOverlayControls = true,
+    this.showNetworkStats = true,
+  });
 
   @override
   State<CruxConferenceView> createState() => _CruxConferenceViewState();
@@ -26,6 +44,7 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
   late AnimationController _layoutAnimationController;
   final ScrollController _feedScrollController = ScrollController();
   final List<ReactionParticle> _reactionParticles = [];
+  Timer? _particlePruneTimer;
 
   @override
   void initState() {
@@ -38,10 +57,60 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
       duration: ConferenceTheme.layoutChange,
       vsync: this,
     );
+
+    // Réactions locales ET distantes arrivent par le même bus.
+    ReactionBus.instance.addListener(_onReactionPublished);
+
+    // Les particules expirées sont purgées régulièrement (sinon la liste
+    // grossit indéfiniment pendant une longue réunion).
+    _particlePruneTimer = Timer.periodic(const Duration(milliseconds: 500), (
+      _,
+    ) {
+      if (!mounted) return;
+
+      final before = _reactionParticles.length;
+
+      _reactionParticles.removeWhere((particle) => particle.isExpired);
+
+      if (_reactionParticles.length != before) {
+        setState(() {});
+      }
+    });
+  }
+
+  void _onReactionPublished() {
+    if (!mounted) return;
+
+    final emoji = ReactionBus.instance.lastEmoji;
+
+    if (emoji == null) return;
+
+    setState(() {
+      final size = MediaQuery.of(context).size;
+      final index = _reactionParticles.length;
+      _reactionParticles.add(
+        ReactionParticle(
+          emoji: emoji,
+          startPosition: Offset(
+            size.width * 0.3 + (size.width * 0.4 / 8) * (index % 8),
+            size.height * 0.7,
+          ),
+          velocity: Offset(
+            (size.width * 0.4 / 8) * ((index % 8) - 4),
+            -200 - (index % 3) * 50,
+          ),
+          scale: 0.8 + (index % 5) * 0.1,
+          rotation: (index * 45) % 360,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    });
   }
 
   @override
   void dispose() {
+    ReactionBus.instance.removeListener(_onReactionPublished);
+    _particlePruneTimer?.cancel();
     _speakerAnimationController.dispose();
     _layoutAnimationController.dispose();
     _feedScrollController.dispose();
@@ -77,25 +146,8 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
   }
 
   void _addReaction(ReactionEmoji emoji) {
-    setState(() {
-      final size = MediaQuery.of(context).size;
-      final particle = ReactionParticle(
-        emoji: emoji.emoji,
-        startPosition: Offset(
-          size.width * 0.3 +
-              (size.width * 0.4 / 8) * (_reactionParticles.length % 8),
-          size.height * 0.7,
-        ),
-        velocity: Offset(
-          (size.width * 0.4 / 8) * ((_reactionParticles.length % 8) - 4),
-          -200 - (_reactionParticles.length % 3) * 50,
-        ),
-        scale: 0.8 + (_reactionParticles.length % 5) * 0.1,
-        rotation: (_reactionParticles.length * 45) % 360,
-        duration: const Duration(seconds: 3),
-      );
-      _reactionParticles.add(particle);
-    });
+    // Le passage par le bus centralise la création de particules.
+    ReactionBus.instance.publish(emoji.emoji);
   }
 
   @override
@@ -119,31 +171,34 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
               _buildMainContent(provider, layoutMetrics),
 
               // Network stats overlay
-              NetworkStatsOverlay(
-                fps: provider.fps,
-                latency: provider.latency,
-                bandwidth: provider.bandwidth,
-                jitter: provider.jitter,
-              ),
+              if (widget.showNetworkStats)
+                NetworkStatsOverlay(
+                  fps: provider.fps,
+                  latency: provider.latency,
+                  bandwidth: provider.bandwidth,
+                  jitter: provider.jitter,
+                ),
 
-              // Reactions overlay
+              // Reactions overlay (particules locales + distantes)
               ReactionsOverlay(
                 particles: _reactionParticles,
+                showPicker: widget.showOverlayControls,
                 onReactionTap: _addReaction,
               ),
 
-              // Contextual controls
-              Positioned(
-                left: layoutMetrics.controlsArea.left,
-                bottom: layoutMetrics.controlsArea.top,
-                child: ContextualControlsBar(
-                  isMicEnabled: provider.isMicEnabled,
-                  isCameraEnabled: provider.isCameraEnabled,
-                  isHandRaised: provider.isHandRaised,
-                  isScreenSharing: provider.isScreenSharing,
-                  onControlAction: _handleControlAction,
+              // Contextual controls (mode autonome uniquement)
+              if (widget.showOverlayControls)
+                Positioned(
+                  left: layoutMetrics.controlsArea.left,
+                  bottom: layoutMetrics.controlsArea.top,
+                  child: ContextualControlsBar(
+                    isMicEnabled: provider.isMicEnabled,
+                    isCameraEnabled: provider.isCameraEnabled,
+                    isHandRaised: provider.isHandRaised,
+                    isScreenSharing: provider.isScreenSharing,
+                    onControlAction: _handleControlAction,
+                  ),
                 ),
-              ),
             ],
           );
         },
@@ -172,14 +227,23 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
     LayoutMetrics layoutMetrics,
   ) {
     final speakerState = provider.speakerState;
-    if (!speakerState.hasSpeaker) {
-      return _buildWaitingRoom();
+
+    ParticipantDisplayState? speakerParticipant;
+
+    if (speakerState.hasSpeaker) {
+      speakerParticipant = _getParticipantDisplayState(
+        provider,
+        speakerState.currentSpeaker!.sid,
+      );
     }
 
-    final speakerParticipant = _getParticipantDisplayState(
-      provider,
-      speakerState.currentSpeaker!.sid,
-    );
+    // Avant le premier orateur détecté, afficher le premier participant
+    // (le local) au lieu d'une salle d'attente vide.
+    speakerParticipant ??=
+        provider.activeParticipants.isNotEmpty
+            ? provider.activeParticipants.first
+            : null;
+
     if (speakerParticipant == null) {
       return _buildWaitingRoom();
     }
@@ -194,10 +258,10 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
             child: SpeakerCard(
               participantState: speakerParticipant,
               isPinned: speakerState.isPinned,
-              isDominantSpeaker: true,
+              isDominantSpeaker: speakerState.hasSpeaker,
               onTap:
                   () =>
-                      provider.pinParticipant(speakerParticipant.participantId),
+                      provider.pinParticipant(speakerParticipant!.participantId),
               onLongPress: () => provider.unpinParticipant(),
             ),
           ),
@@ -285,43 +349,42 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
     MeetingStateProvider provider,
     LayoutMetrics layoutMetrics,
   ) {
-    final screenSharingParticipant = provider.activeParticipants.firstWhere(
-      (p) => p.isScreenSharing,
-      orElse: () => provider.activeParticipants.first,
-    );
+    // Le partageur est désormais détecté réellement
+    // (ConferenceLayoutController.updateParticipant / isScreenShareEnabled).
+    ParticipantDisplayState? sharingParticipant;
+    for (final p in provider.activeParticipants) {
+      if (p.isScreenSharing) {
+        sharingParticipant = p;
+        break;
+      }
+    }
+
+    // Rendu réel du flux de partage (screenShareVideo) quand souscrit,
+    // sinon placeholder explicite.
+    Widget shareContent;
+    if (sharingParticipant != null) {
+      final sharePub =
+          sharingParticipant.participant.getTrackPublicationBySource(
+            TrackSource.screenShareVideo,
+          );
+      final track = sharePub?.track;
+      if (track is VideoTrack) {
+        shareContent = VideoTrackRenderer(track);
+      } else {
+        shareContent = _buildScreensharePlaceholder(sharingParticipant);
+      }
+    } else {
+      shareContent = _buildScreensharePlaceholder(null);
+    }
 
     return Stack(
       children: [
         // Screen share container
         Positioned.fromRect(
           rect: layoutMetrics.speakerArea,
-          child: Container(
-            decoration: BoxDecoration(
-              color: AppColors.surfaceVariant,
-              borderRadius: BorderRadius.circular(AppColors.radiusCard),
-            ),
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(
-                    Icons.screen_share,
-                    size: 64,
-                    color: AppColors.primary,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    screenSharingParticipant.displayName,
-                    style: ConferenceTheme.speakerNameStyle,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Partage d\'écran',
-                    style: ConferenceTheme.feedNameStyle,
-                  ),
-                ],
-              ),
-            ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppColors.radiusCard),
+            child: shareContent,
           ),
         ),
 
@@ -332,6 +395,31 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
             child: _buildLiveFeed(provider),
           ),
       ],
+    );
+  }
+
+  Widget _buildScreensharePlaceholder(ParticipantDisplayState? sharer) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surfaceVariant,
+        borderRadius: BorderRadius.circular(AppColors.radiusCard),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.screen_share, size: 64, color: AppColors.primary),
+            const SizedBox(height: 16),
+            if (sharer != null)
+              Text(sharer.displayName, style: ConferenceTheme.speakerNameStyle),
+            const SizedBox(height: 8),
+            const Text(
+              'Partage d\'écran',
+              style: ConferenceTheme.feedNameStyle,
+            ),
+          ],
+        ),
+      ),
     );
   }
 

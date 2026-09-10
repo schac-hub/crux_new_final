@@ -53,7 +53,8 @@ class NoiseReductionService {
   Future<void> _loadPreferences() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      _isEnabled = prefs.getBool(_enabledKey) ?? false;
+      // Activée par défaut (référence Zoom : suppression du bruit ON).
+    _isEnabled = prefs.getBool(_enabledKey) ?? true;
       _echoCancellation = prefs.getBool(_echoCancellationKey) ?? true;
       _autoGainControl = prefs.getBool(_autoGainControlKey) ?? true;
 

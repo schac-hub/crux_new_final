@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/app_config.dart';
 import '../services/meeting_service.dart';
 import '../theme/colors.dart';
 import '../widgets/elegant_toast.dart';
@@ -9,20 +11,27 @@ import 'large_conference_screen.dart';
 
 class MeetingScreen extends StatefulWidget {
   final String meetingId;
+  final String? meetingCode;
   final String meetingName;
   final String userId;
   final String userName;
   final String? userEmail;
   final bool isHost;
 
+  /// Passcode déjà validé par un écran en amont (ex. JoinMeetingScreen) :
+  /// évite une double saisie tout en gardant la vérification côté écran.
+  final String? preValidatedPasscode;
+
   const MeetingScreen({
     super.key,
     required this.meetingId,
+    this.meetingCode,
     required this.meetingName,
     required this.userId,
     required this.userName,
     this.userEmail,
     this.isHost = false,
+    this.preValidatedPasscode,
   });
 
   @override
@@ -32,8 +41,26 @@ class MeetingScreen extends StatefulWidget {
 class _MeetingScreenState extends State<MeetingScreen> {
   final MeetingService _meetingService = MeetingService();
 
+  final _passcodeCtrl = TextEditingController();
+
   bool _preparing = true;
   String? _error;
+
+  // Porte de sécurité (tous chemins de jonction : accueil, code, deep links).
+  bool _requiresPasscode = false;
+  String? _meetingPasscode;
+  String? _passError;
+
+  // Préférences média pré-jonction (mêmes clés que SettingsScreen et que
+  // LargeConferenceScreen._loadPreferences, pour un comportement cohérent).
+  bool _micOn = true;
+  bool _camOn = true;
+
+  /// Code partageable (XXX-XXX-XXX) ; retombe sur l'ID technique si absent.
+  String get _shareCode =>
+      (widget.meetingCode ?? '').trim().isNotEmpty
+          ? widget.meetingCode!.trim()
+          : widget.meetingId;
 
   @override
   void initState() {
@@ -41,7 +68,74 @@ class _MeetingScreenState extends State<MeetingScreen> {
     _prepare();
   }
 
+  @override
+  void dispose() {
+    _passcodeCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _prepare() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (mounted) {
+        setState(() {
+          _micOn = prefs.getBool('crux_mic_default') ?? true;
+          _camOn = prefs.getBool('crux_cam_default') ?? true;
+        });
+      }
+
+      // Contrôles d'accès centralisés : statut, verrou hôte, passcode.
+      // L'hôte ne repasse pas par la saisie de son propre passcode.
+      final meeting = await _meetingService.getMeetingOnce(widget.meetingId);
+
+      if (!mounted) return;
+
+      if (meeting != null) {
+        if (meeting.status == MeetingStatus.ended) {
+          setState(() {
+            _preparing = false;
+            _error = 'Cette réunion est terminée.';
+          });
+          return;
+        }
+
+        if (meeting.isLocked && !widget.isHost) {
+          setState(() {
+            _preparing = false;
+            _error = 'Réunion verrouillée par l\'hôte.';
+          });
+          return;
+        }
+
+        final passcode = meeting.passcode;
+        final needsPasscode =
+            passcode != null &&
+            passcode.isNotEmpty &&
+            !widget.isHost &&
+            widget.preValidatedPasscode != passcode;
+
+        if (needsPasscode) {
+          setState(() {
+            _preparing = false;
+            _requiresPasscode = true;
+            _meetingPasscode = passcode;
+          });
+          return;
+        }
+      }
+
+      await _finalizeJoin();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _preparing = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  Future<void> _finalizeJoin() async {
     try {
       // Utiliser le backend server pour ajouter le participant
       await _addParticipantViaBackend(widget.meetingId);
@@ -56,6 +150,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
       if (mounted) {
         setState(() {
           _preparing = false;
+          _requiresPasscode = false;
         });
       }
     } catch (e) {
@@ -66,6 +161,33 @@ class _MeetingScreenState extends State<MeetingScreen> {
         });
       }
     }
+  }
+
+  void _submitPasscode() {
+    if (_passcodeCtrl.text.trim() == _meetingPasscode) {
+      setState(() {
+        _passError = null;
+        _preparing = true;
+      });
+
+      _finalizeJoin();
+    } else {
+      setState(() => _passError = 'Code d\'accès incorrect');
+    }
+  }
+
+  Future<void> _setMicDefault(bool value) async {
+    setState(() => _micOn = value);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('crux_mic_default', value);
+  }
+
+  Future<void> _setCamDefault(bool value) async {
+    setState(() => _camOn = value);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('crux_cam_default', value);
   }
 
   Future<void> _addParticipantViaBackend(String meetingId) async {
@@ -83,13 +205,13 @@ class _MeetingScreenState extends State<MeetingScreen> {
     }
   }
 
-  void _copyId() {
-    Clipboard.setData(ClipboardData(text: widget.meetingId));
+  void _copyText(String text, String successMessage) {
+    Clipboard.setData(ClipboardData(text: text));
 
     ElegantToast.show(
       context,
       title: 'Succès',
-      message: 'ID de la réunion copié dans le presse-papiers.',
+      message: successMessage,
       type: ElegantToastType.success,
     );
   }
@@ -101,6 +223,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
         builder:
             (_) => LargeConferenceScreen(
               meetingId: widget.meetingId,
+              meetingCode: widget.meetingCode,
               meetingName: widget.meetingName,
               userId: widget.userId,
               userName: widget.userName,
@@ -130,9 +253,111 @@ class _MeetingScreenState extends State<MeetingScreen> {
                     strokeWidth: 2,
                   ),
                 )
+                : _requiresPasscode
+                ? _buildPasscodeGate()
                 : _error != null
                 ? _buildError()
                 : _buildContent(),
+      ),
+    );
+  }
+
+  Widget _buildPasscodeGate() {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppColors.radiusCard),
+            border: Border.all(color: AppColors.borderSubtle),
+            boxShadow: AppColors.softShadow,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(
+                Icons.lock_outline,
+                color: AppColors.primary,
+                size: 48,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Code d\'accès requis',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Cette réunion est protégée par un code.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _passcodeCtrl,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                obscureText: true,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  letterSpacing: 6,
+                ),
+                decoration: InputDecoration(
+                  hintText: '4 à 6 chiffres',
+                  hintStyle: const TextStyle(color: AppColors.textTertiary),
+                  counterStyle: const TextStyle(color: AppColors.textTertiary),
+                  filled: true,
+                  fillColor: AppColors.surfaceVariant,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: AppColors.border),
+                  ),
+                ),
+                onSubmitted: (_) => _submitPasscode(),
+              ),
+              if (_passError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _passError!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppColors.error, fontSize: 12),
+                ),
+              ],
+              const SizedBox(height: 20),
+              SizedBox(
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _submitPasscode,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: AppColors.textOnPrimary,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(
+                        AppColors.radiusButton,
+                      ),
+                    ),
+                  ),
+                  child: const Text('Valider'),
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Annuler',
+                  style: TextStyle(color: AppColors.textTertiary),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -264,7 +489,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
           ),
           const SizedBox(height: 20),
           const Text(
-            'Réunion sécurisée',
+            'Prêt à rejoindre',
             style: TextStyle(
               color: AppColors.textPrimary,
               fontSize: 17,
@@ -283,7 +508,11 @@ class _MeetingScreenState extends State<MeetingScreen> {
           ),
           const SizedBox(height: 22),
           InkWell(
-            onTap: _copyId,
+            onTap:
+                () => _copyText(
+                  _shareCode,
+                  'Code de la réunion copié dans le presse-papiers.',
+                ),
             borderRadius: BorderRadius.circular(12),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
@@ -302,7 +531,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
                   ),
                   const SizedBox(width: 7),
                   Text(
-                    widget.meetingId,
+                    _shareCode,
                     style: const TextStyle(
                       color: AppColors.textPrimary,
                       fontWeight: FontWeight.w700,
@@ -317,6 +546,51 @@ class _MeetingScreenState extends State<MeetingScreen> {
                   ),
                 ],
               ),
+            ),
+          ),
+          TextButton.icon(
+            onPressed:
+                () => _copyText(
+                  AppConfig.webJoinLink(widget.meetingId),
+                  'Lien d\'invitation copié.',
+                ),
+            icon: const Icon(Icons.link_outlined, size: 16),
+            label: const Text(
+              'Copier le lien d\'invitation',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
+          const Divider(color: AppColors.borderSubtle, height: 28),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            activeTrackColor: AppColors.primary,
+            value: _micOn,
+            onChanged: _setMicDefault,
+            secondary: Icon(
+              _micOn ? Icons.mic : Icons.mic_off,
+              color: _micOn ? AppColors.primary : AppColors.textTertiary,
+              size: 22,
+            ),
+            title: const Text(
+              'Rejoindre avec le micro activé',
+              style: TextStyle(color: AppColors.textPrimary, fontSize: 13),
+            ),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            activeTrackColor: AppColors.primary,
+            value: _camOn,
+            onChanged: _setCamDefault,
+            secondary: Icon(
+              _camOn ? Icons.videocam : Icons.videocam_off,
+              color: _camOn ? AppColors.primary : AppColors.textTertiary,
+              size: 22,
+            ),
+            title: const Text(
+              'Rejoindre avec la caméra activée',
+              style: TextStyle(color: AppColors.textPrimary, fontSize: 13),
             ),
           ),
         ],

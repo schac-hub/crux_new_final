@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:path/path.dart' as path;
@@ -40,61 +40,6 @@ class FileSharingService {
     '.txt',
   ];
 
-  Future<Map<String, dynamic>> shareFile({
-    required String meetingId,
-    required File file,
-    required String senderId,
-    required String senderName,
-  }) async {
-    try {
-      final fileExtension = path.extension(file.path).toLowerCase();
-      final fileName = '${_uuid.v4()}$fileExtension';
-
-      // Validate file size
-      final fileSize = await file.length();
-      if (fileSize > maxFileSize) {
-        throw Exception('File size exceeds 50MB limit');
-      }
-
-      // Validate file type
-      if (!_isFileTypeAllowed(fileExtension)) {
-        throw Exception('File type not allowed');
-      }
-
-      // Upload to Firebase Storage
-      final ref = _storage.ref().child('meetings/$meetingId/files/$fileName');
-      final uploadTask = ref.putFile(file);
-
-      final snapshot = await uploadTask;
-      final downloadUrl = await snapshot.ref.getDownloadURL();
-
-      // Save metadata to Firestore
-      final fileData = {
-        'id': _uuid.v4(),
-        'fileName': path.basename(file.path),
-        'fileUrl': downloadUrl,
-        'fileSize': fileSize,
-        'fileType': _getFileType(fileExtension),
-        'senderId': senderId,
-        'senderName': senderName,
-        'timestamp': FieldValue.serverTimestamp(),
-        'meetingId': meetingId,
-      };
-
-      await _firestore
-          .collection('meetings')
-          .doc(meetingId)
-          .collection('files')
-          .add(fileData);
-
-      _logger.i('File shared successfully: ${fileData['fileName']}');
-      return fileData;
-    } catch (e) {
-      _logger.e('Error sharing file', error: e);
-      rethrow;
-    }
-  }
-
   Future<void> deleteFile({
     required String meetingId,
     required String fileId,
@@ -127,6 +72,66 @@ class FileSharingService {
         .collection('files')
         .orderBy('timestamp', descending: true)
         .snapshots();
+  }
+
+  /// Partage un fichier depuis ses octets (compatible web + mobile via
+  /// file_picker withData : dart:io n'est pas disponible sur le web).
+  ///
+  /// Upload vers Firebase Storage puis métadonnées dans Firestore
+  /// (meetings/{id}/files), consommées par le chat de la réunion.
+  Future<Map<String, dynamic>> shareFileBytes({
+    required String meetingId,
+    required String fileName,
+    required List<int> bytes,
+    required String senderId,
+    required String senderName,
+  }) async {
+    try {
+      final fileExtension =
+          path.extension(fileName).isNotEmpty
+              ? path.extension(fileName).toLowerCase()
+              : '.bin';
+      final storedName = '${_uuid.v4()}$fileExtension';
+
+      final fileSize = bytes.length;
+      if (fileSize > maxFileSize) {
+        throw Exception('File size exceeds 50MB limit');
+      }
+
+      if (!_isFileTypeAllowed(fileExtension)) {
+        throw Exception('File type not allowed');
+      }
+
+      // Upload to Firebase Storage
+      final ref = _storage.ref().child('meetings/$meetingId/files/$storedName');
+      final snapshot = await ref.putData(Uint8List.fromList(bytes));
+      final downloadUrl = await snapshot.ref.getDownloadURL();
+
+      // Save metadata to Firestore
+      final fileData = {
+        'id': _uuid.v4(),
+        'fileName': fileName,
+        'fileUrl': downloadUrl,
+        'fileSize': fileSize,
+        'fileType': _getFileType(fileExtension),
+        'senderId': senderId,
+        'senderName': senderName,
+        'timestamp': FieldValue.serverTimestamp(),
+        'meetingId': meetingId,
+      };
+
+      await _firestore
+          .collection('meetings')
+          .doc(meetingId)
+          .collection('files')
+          .add(fileData);
+
+      _logger.i('File shared successfully: $fileName');
+      return fileData;
+    } catch (e) {
+      _logger.e('Error sharing file', error: e);
+      rethrow;
+    }
   }
 
   bool _isFileTypeAllowed(String extension) {

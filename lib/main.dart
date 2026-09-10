@@ -411,6 +411,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
           builder:
               (_) => MeetingScreen(
                 meetingId: meetingId,
+                meetingCode: data['meetingCode'] as String?,
                 meetingName: data['title'] as String? ?? 'Réunion',
                 userId: current.uid,
                 userName: current.displayName ?? current.email ?? 'Invité',

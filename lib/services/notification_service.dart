@@ -1,4 +1,4 @@
-import 'dart:io';
+import '../utils/io_compat.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../utils/logger.dart';

@@ -3,7 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'dart:io';
+import '../utils/local_file.dart';
 
 import '../models/user_model.dart';
 import '../services/meeting_service.dart';
@@ -63,8 +63,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _startInstant() async {
     try {
-      // 1. Créer la réunion dans Firestore
-      final meetingId = await MeetingService().createMeeting(
+      // 1. Créer la réunion dans Firestore (le service retourne le modèle
+      //    complet : id + meetingCode, sans re-lire le document).
+      final meeting = await MeetingService().createMeeting(
         title: 'Réunion instantanée',
         description: '',
         organizerName: _displayName,
@@ -73,18 +74,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (!mounted) return;
 
-      // 2. Récupérer le meetingCode (XXX-XXX-XXX) depuis Firestore
-      final meeting = await MeetingService().getMeetingOnce(meetingId);
-      if (!mounted) return;
-      final meetingCode = meeting?.meetingCode ?? '';
-
-      // 3. Naviguer vers l'écran de réunion avec l'ID + le code
+      // 2. Naviguer vers l'écran de réunion avec l'ID + le code
       Navigator.of(context).pushNamed(
         AppRoutes.meeting,
         arguments: {
-          'meetingId': meetingId,
-          'meetingCode': meetingCode, // ← AJOUT
-          'meetingName': 'Réunion instantanée',
+          'meetingId': meeting.id,
+          'meetingCode': meeting.meetingCode,
+          'meetingName': meeting.title,
           'userId': _uid,
           'userName': _displayName,
           'userEmail': widget.user.email,
@@ -692,10 +688,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 .toUpperCase();
 
     Widget avatar;
-    if (_localPhotoPath != null && File(_localPhotoPath!).existsSync()) {
+    if (localFileExists(_localPhotoPath ?? '')) {
       avatar = CircleAvatar(
         radius: 24,
-        backgroundImage: FileImage(File(_localPhotoPath!)),
+        backgroundImage: localFileImage(_localPhotoPath!)!,
       );
     } else {
       avatar = CircleAvatar(

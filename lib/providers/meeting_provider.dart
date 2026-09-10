@@ -33,15 +33,15 @@ class MeetingProvider extends ChangeNotifier {
     try {
       _setLoading(true);
       _clearError();
-      final meetingId = await _meetingService.createMeeting(
+      final meeting = await _meetingService.createMeeting(
         title: title,
         description: description,
         organizerName: organizerName,
         organizerId: organizerId,
       );
-      _logger.i('✅ Réunion créée: $meetingId');
+      _logger.i('✅ Réunion créée: ${meeting.id}');
       notifyListeners();
-      return meetingId;
+      return meeting.id;
     } catch (e) {
       _setError('Erreur création réunion: $e');
       return null;

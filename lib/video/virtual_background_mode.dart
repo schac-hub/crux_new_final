@@ -1,4 +1,4 @@
-import 'dart:io';
+import '../utils/io_compat.dart';
 import 'package:flutter/material.dart';
 
 /// Modes de fond virtuel CRUX.

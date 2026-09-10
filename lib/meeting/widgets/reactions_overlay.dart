@@ -41,9 +41,14 @@ class ReactionsOverlay extends StatefulWidget {
   final List<ReactionParticle> particles;
   final Function(ReactionEmoji)? onReactionTap;
 
+  /// Affiche le sélecteur de réactions flottant. Peut être désactivé quand
+  /// l'écran hôte fournit son propre sélecteur (ex. feuille modale).
+  final bool showPicker;
+
   const ReactionsOverlay({
     super.key,
     this.particles = const [],
+    this.showPicker = true,
     this.onReactionTap,
   });
 
@@ -81,6 +86,8 @@ class _ReactionsOverlayState extends State<ReactionsOverlay>
   }
 
   void _updateParticles() {
+    if (_activeParticles.isEmpty) return;
+
     setState(() {
       _activeParticles.removeWhere((particle) => particle.isExpired);
     });
@@ -117,8 +124,9 @@ class _ReactionsOverlayState extends State<ReactionsOverlay>
         // Particle layer
         ..._activeParticles.map((particle) => _buildParticle(particle)),
 
-        // Reaction picker
-        Positioned(bottom: 100, right: 20, child: _buildReactionPicker()),
+        // Reaction picker (optionnel)
+        if (widget.showPicker)
+          Positioned(bottom: 100, right: 20, child: _buildReactionPicker()),
       ],
     );
   }

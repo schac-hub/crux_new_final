@@ -1,4 +1,4 @@
-import 'dart:io';
+import '../utils/local_file.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
@@ -58,8 +58,8 @@ class _UniformBlurBackground extends StatelessWidget {
         sigmaX: config.blurRadius,
         sigmaY: config.blurRadius,
       ),
-      child: Image.file(
-        File(config.imagePath!),
+      child: Image(
+        image: localFileImage(config.imagePath!) ?? const AssetImage('assets/images/icon.png'),
         fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
@@ -79,8 +79,8 @@ class _ProgressiveBlurBackground extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         // Couche nette dessous
-        Image.file(
-          File(config.imagePath!),
+        Image(
+          image: localFileImage(config.imagePath!) ?? const AssetImage('assets/images/icon.png'),
           fit: BoxFit.cover,
           width: double.infinity,
           height: double.infinity,
@@ -100,8 +100,8 @@ class _ProgressiveBlurBackground extends StatelessWidget {
               sigmaX: config.blurRadius,
               sigmaY: config.blurRadius,
             ),
-            child: Image.file(
-              File(config.imagePath!),
+            child: Image(
+              image: localFileImage(config.imagePath!) ?? const AssetImage('assets/images/icon.png'),
               fit: BoxFit.cover,
               width: double.infinity,
               height: double.infinity,

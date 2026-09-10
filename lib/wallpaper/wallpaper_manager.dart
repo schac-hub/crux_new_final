@@ -1,4 +1,4 @@
-import 'dart:io';
+import '../utils/local_file.dart';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,7 +13,9 @@ import 'wallpaper_config.dart';
 ///     LateInitializationError qui écran-noircissait l'application ;
 ///   * les fichiers importés sont nettoyés de façon asynchrone et tolérante
 ///     aux erreurs (un fichier verrouillé ne fait plus planter l'import) ;
-///   * `importImage` conserve l'extension d'origine.
+///   * `importImage` conserve l'extension d'origine ;
+///   * les accès fichiers passent par des helpers compatibles web (sur
+///     navigateur, tout est no-op et le fond par défaut est utilisé).
 class WallpaperManager {
   static const String _prefsKey = 'crux_wallpaper_config';
   static const String _folderName = 'wallpaper';
@@ -41,8 +43,8 @@ class WallpaperManager {
     try {
       final config = WallpaperConfig.fromJsonString(json);
       // L'image a pu être supprimée par le système : on ne référence jamais
-      // un fichier absent (sinon Image.file jette une exception au build).
-      if (config.hasImage && !File(config.imagePath!).existsSync()) {
+      // un fichier absent (sinon le rendu jette une exception au build).
+      if (config.hasImage && !localFileExists(config.imagePath!)) {
         return WallpaperConfig.defaultConfig;
       }
       return config;
@@ -54,20 +56,20 @@ class WallpaperManager {
   /// Ancien nom conservé pour compatibilité.
   WallpaperConfig get config => configOrDefault;
 
-  Future<Directory> _wallpaperDir() async {
+  Future<String> _wallpaperDirPath() async {
     final base = await getApplicationDocumentsDirectory();
-    final dir = Directory('${base.path}/$_folderName');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    final path = '${base.path}/$_folderName';
+    if (!await localDirExists(path)) {
+      await createLocalDir(path);
     }
-    return dir;
+    return path;
   }
 
   /// Copie l'image sélectionnée dans le stockage interne et renvoie le chemin
   /// stable. Indispensable : l'URI renvoyée par le Photo Picker expire à la
   /// fin du processus.
   Future<String> importImage(String sourcePath) async {
-    final dir = await _wallpaperDir();
+    final dirPath = await _wallpaperDirPath();
 
     var extension =
         sourcePath.contains('.')
@@ -75,22 +77,17 @@ class WallpaperManager {
             : 'jpg';
     if (extension.length > 5) extension = 'jpg';
 
-    final target = File(
-      '${dir.path}/wallpaper_${DateTime.now().millisecondsSinceEpoch}.$extension',
-    );
-    await File(sourcePath).copy(target.path);
+    final target =
+        '$dirPath/wallpaper_${DateTime.now().millisecondsSinceEpoch}.$extension';
+    await copyLocalFile(sourcePath, target);
 
     // Nettoyage des anciens fonds pour ne pas remplir le stockage.
-    await for (final entity in dir.list()) {
-      if (entity.path == target.path) continue;
-      try {
-        await entity.delete(recursive: true);
-      } catch (_) {
-        // Fichier encore utilisé par le rendu : sans gravité.
-      }
+    await for (final entityPath in listLocalDirPaths(dirPath)) {
+      if (entityPath == target) continue;
+      await deleteLocalFile(entityPath);
     }
 
-    return target.path;
+    return target;
   }
 
   Future<void> save(WallpaperConfig config) async {
@@ -101,8 +98,8 @@ class WallpaperManager {
   Future<void> reset() async {
     await init();
     try {
-      final dir = await _wallpaperDir();
-      if (await dir.exists()) await dir.delete(recursive: true);
+      final dirPath = await _wallpaperDirPath();
+      await deleteLocalDir(dirPath);
     } catch (_) {
       // Rien à supprimer.
     }

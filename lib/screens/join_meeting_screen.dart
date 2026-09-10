@@ -3,7 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/colors.dart';
 import '../services/meeting_service.dart';
-import '../services/backend_api_service.dart';
 import '../utils/logger.dart';
 import '../widgets/custom_button.dart';
 import 'meeting_screen.dart';
@@ -24,6 +23,9 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
   bool _loading = false;
   bool _needsPasscode = false;
   String? _error;
+
+  /// Réunion trouvée par code, en attente de validation (passcode, statut…).
+  MeetingModel? _foundMeeting;
 
   @override
   void dispose() {
@@ -68,58 +70,28 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
     try {
       logger.i('🔍 Tentative de rejoindre réunion avec code: $code');
 
-      // Try to find meeting by meetingCode via backend API
-      final backendService = BackendApiService();
-      final meetingData = await backendService.getMeetingByCode(code);
+      // Recherche directe Firestore par meetingCode (BackendApiService est un
+      // simple alias : une seule requête suffit désormais).
+      final meeting = await MeetingService().getMeetingByCode(code);
 
       if (!mounted) return;
 
-      if (meetingData == null) {
-        logger.w(
-          '⚠️ Backend n\'a pas trouvé la réunion, tentative via Firestore direct',
-        );
-        // Fallback to direct Firestore lookup by code
-        final meeting = await MeetingService().getMeetingByCode(code);
-        if (!mounted) return;
-
-        if (meeting == null) {
-          logger.e('❌ Réunion introuvable via Firestore pour le code: $code');
-          setState(() {
-            _loading = false;
-            _error = 'Réunion introuvable ou expirée';
-          });
-          return;
-        }
-
-        logger.i('✅ Réunion trouvée via Firestore: ${meeting.id}');
-        _navigateToMeeting(meeting, current);
+      if (meeting == null) {
+        logger.e('❌ Réunion introuvable pour le code: $code');
+        setState(() {
+          _loading = false;
+          _foundMeeting = null;
+          _error = 'Réunion introuvable ou expirée';
+        });
         return;
       }
 
-      final meeting = backendService.parseMeetingData(meetingData);
-      if (meeting != null) {
-        logger.i('✅ Réunion trouvée via backend: ${meeting.id}');
-        // Add participant to meeting via backend
-        try {
-          await backendService.addParticipant(meeting.id);
-          logger.i('✅ Participant ajouté via backend');
-        } catch (e) {
-          logger.w(
-            'Failed to add participant via backend, trying direct Firestore',
-            error: e,
-          );
-          await MeetingService().addParticipant(meeting.id, current.uid);
-          logger.i('✅ Participant ajouté via Firestore direct');
-        }
+      logger.i('✅ Réunion trouvée: ${meeting.id}');
+      setState(() {
+        _foundMeeting = meeting;
+      });
 
-        _navigateToMeeting(meeting, current);
-      } else {
-        logger.e('❌ Erreur parsing meeting data du backend');
-        setState(() {
-          _loading = false;
-          _error = 'Erreur lors de la lecture des données de la réunion';
-        });
-      }
+      _tryEnter();
     } catch (e) {
       logger.e('❌ JoinMeetingScreen._join error', error: e);
       if (mounted) {
@@ -131,11 +103,30 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
     }
   }
 
-  void _navigateToMeeting(MeetingModel meeting, User current) {
-    if (!mounted) return;
+  /// Valide l'état de la réunion AVANT tout ajout de participant :
+  /// statut, verrou hôte, puis passcode. Côté Zoom/Meet, aucune trace de
+  /// présence ne doit exister tant que l'utilisateur n'est pas autorisé.
+  void _tryEnter() {
+    final meeting = _foundMeeting;
+    if (meeting == null || !mounted) return;
 
-    final hasPasscode =
-        meeting.passcode != null && meeting.passcode!.isNotEmpty;
+    if (meeting.status == MeetingStatus.ended) {
+      setState(() {
+        _loading = false;
+        _error = 'Cette réunion est terminée.';
+      });
+      return;
+    }
+
+    if (meeting.isLocked) {
+      setState(() {
+        _loading = false;
+        _error = 'Réunion verrouillée par l\'hôte.';
+      });
+      return;
+    }
+
+    final hasPasscode = meeting.passcode != null && meeting.passcode!.isNotEmpty;
     if (hasPasscode && !_needsPasscode) {
       setState(() {
         _loading = false;
@@ -151,6 +142,20 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
       return;
     }
 
+    _enterMeeting();
+  }
+
+  Future<void> _enterMeeting() async {
+    final meeting = _foundMeeting;
+    final current = FirebaseAuth.instance.currentUser;
+    if (meeting == null || current == null || !mounted) return;
+
+    try {
+      await MeetingService().addParticipant(meeting.id, current.uid);
+    } catch (e) {
+      logger.w('Ajout participant échoué (jonction poursuivie)', error: e);
+    }
+
     if (!mounted) return;
 
     if (meeting.isLargeConference) {
@@ -160,6 +165,7 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
           builder:
               (_) => LargeConferenceScreen(
                 meetingId: meeting.id,
+                meetingCode: meeting.meetingCode,
                 meetingName: meeting.title,
                 userId: current.uid,
                 userName: _displayName(),
@@ -173,12 +179,14 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
           builder:
               (_) => MeetingScreen(
                 meetingId: meeting.id,
-                meetingCode: meeting.meetingCode, // ← AJOUT
+                meetingCode: meeting.meetingCode,
                 meetingName: meeting.title,
                 userId: current.uid,
                 userName: _displayName(),
                 userEmail: current.email,
                 isHost: false,
+                // Passcode déjà validé ici : MeetingScreen ne redemandera pas.
+                preValidatedPasscode: meeting.passcode,
               ),
         ),
       );
@@ -253,6 +261,67 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
                   ),
                 ),
               ),
+              if (_foundMeeting != null) ...[
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceVariant,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color:
+                          _needsPasscode
+                              ? AppColors.primary
+                              : AppColors.border,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: const BoxDecoration(
+                          gradient: AppColors.primaryGradient,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.videocam_outlined,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _foundMeeting!.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Organisée par ${_foundMeeting!.organizer}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white54,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               if (_needsPasscode) ...[
                 const SizedBox(height: 20),
                 Text(

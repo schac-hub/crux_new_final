@@ -64,38 +64,40 @@ class KeyboardShortcutsService {
 
   /// Enregistre les raccourcis par défaut
   void _registerDefaultShortcuts() {
-    // Raccourcis principaux (inspirés de Zoom/Google Meet)
+    // Raccourcis alignés sur Zoom Desktop (Windows/Linux) : la touche Alt
+    // n'entre pas en conflit avec le navigateur (Ctrl+S, Ctrl+P, Ctrl+F…)
+    // ni avec le copier-coller (Ctrl+C).
 
-    // Micro : Ctrl/Cmd + D
-    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyD, control: true)] =
+    // Micro : Alt + A
+    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyA, alt: true)] =
         _onToggleMic ?? () {};
 
-    // Caméra : Ctrl/Cmd + E
-    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyE, control: true)] =
+    // Caméra : Alt + V
+    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyV, alt: true)] =
         _onToggleCamera ?? () {};
 
-    // Partage d'écran : Ctrl/Cmd + S
-    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyS, control: true)] =
+    // Partage d'écran : Alt + S
+    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyS, alt: true)] =
         _onToggleScreenShare ?? () {};
 
-    // Lever la main : Ctrl/Cmd + H
-    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyH, control: true)] =
+    // Lever la main : Alt + Y
+    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyY, alt: true)] =
         _onToggleHandRaise ?? () {};
 
-    // Chat : Ctrl/Cmd + C
-    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyC, control: true)] =
+    // Chat : Alt + H
+    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyH, alt: true)] =
         _onToggleChat ?? () {};
 
-    // Participants : Ctrl/Cmd + P
-    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyP, control: true)] =
+    // Participants : Alt + U
+    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyU, alt: true)] =
         _onToggleParticipants ?? () {};
 
-    // Réactions : Ctrl/Cmd + R
-    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyR, control: true)] =
+    // Réactions : Alt + R
+    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyR, alt: true)] =
         _onToggleReactions ?? () {};
 
-    // Plein écran : Ctrl/Cmd + F
-    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyF, control: true)] =
+    // Plein écran : Alt + F
+    _shortcuts[const SingleActivator(LogicalKeyboardKey.keyF, alt: true)] =
         _onToggleFullscreen ?? () {};
 
     // Quitter : Alt + Q
@@ -156,42 +158,42 @@ class KeyboardShortcutsService {
   List<ShortcutDescription> getAvailableShortcuts() {
     return [
       ShortcutDescription(
-        keys: 'Ctrl/Cmd + D',
+        keys: 'Alt + A',
         description: 'Activer/Désactiver le micro',
         action: _onToggleMic != null,
       ),
       ShortcutDescription(
-        keys: 'Ctrl/Cmd + E',
+        keys: 'Alt + V',
         description: 'Activer/Désactiver la caméra',
         action: _onToggleCamera != null,
       ),
       ShortcutDescription(
-        keys: 'Ctrl/Cmd + S',
+        keys: 'Alt + S',
         description: 'Partager/Arrêter le partage d\'écran',
         action: _onToggleScreenShare != null,
       ),
       ShortcutDescription(
-        keys: 'Ctrl/Cmd + H',
+        keys: 'Alt + Y',
         description: 'Lever/Baisser la main',
         action: _onToggleHandRaise != null,
       ),
       ShortcutDescription(
-        keys: 'Ctrl/Cmd + C',
+        keys: 'Alt + H',
         description: 'Ouvrir/Fermer le chat',
         action: _onToggleChat != null,
       ),
       ShortcutDescription(
-        keys: 'Ctrl/Cmd + P',
+        keys: 'Alt + U',
         description: 'Afficher/Masquer les participants',
         action: _onToggleParticipants != null,
       ),
       ShortcutDescription(
-        keys: 'Ctrl/Cmd + R',
+        keys: 'Alt + R',
         description: 'Afficher/Masquer les réactions',
         action: _onToggleReactions != null,
       ),
       ShortcutDescription(
-        keys: 'Ctrl/Cmd + F',
+        keys: 'Alt + F',
         description: 'Plein écran',
         action: _onToggleFullscreen != null,
       ),
@@ -213,6 +215,7 @@ class KeyboardShortcutsService {
   Widget buildKeyboardShortcutHandler({required Widget child}) {
     return Focus(
       focusNode: _focusNode,
+      autofocus: true,
       onKeyEvent: (node, event) {
         if (handleKeyEvent(event)) {
           return KeyEventResult.handled;

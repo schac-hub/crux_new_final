@@ -74,7 +74,7 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
 
     try {
       // Create meeting directly via Firestore (backend removed to avoid failures)
-      final meetingId = await MeetingService().createMeeting(
+      final meeting = await MeetingService().createMeeting(
         title: title,
         description: '',
         organizerName: _displayName(),
@@ -82,7 +82,7 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
         passcode: passcode.isNotEmpty ? passcode : null,
         isLargeConference: widget.largeConference,
       );
-      logger.i('✅ Réunion créée via direct Firestore: $meetingId');
+      logger.i('✅ Réunion créée via direct Firestore: ${meeting.id}');
 
       if (!mounted) return;
 
@@ -92,7 +92,8 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
           MaterialPageRoute(
             builder:
                 (_) => LargeConferenceScreen(
-                  meetingId: meetingId,
+                  meetingId: meeting.id,
+                  meetingCode: meeting.meetingCode,
                   meetingName: title,
                   userId: current.uid,
                   userName: _displayName(),
@@ -107,7 +108,8 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
           MaterialPageRoute(
             builder:
                 (_) => MeetingScreen(
-                  meetingId: meetingId,
+                  meetingId: meeting.id,
+                  meetingCode: meeting.meetingCode,
                   meetingName: title,
                   userId: current.uid,
                   userName: _displayName(),

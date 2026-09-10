@@ -17,7 +17,7 @@ class AppConfig {
     defaultValue: 'https://crux-3c6be.web.app',
   );
 
-  static const String appVersion = '2.38.1';
+  static const String appVersion = '2.39.0';
 
   // ===========================================================================
   // LIVEKIT

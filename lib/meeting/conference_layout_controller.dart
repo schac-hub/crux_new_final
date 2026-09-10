@@ -48,8 +48,11 @@ class ConferenceLayoutController extends ChangeNotifier {
       participant: participant,
       mode: existingState?.mode ?? ParticipantDisplayMode.tile,
       isAudioActive: participant.isMuted == false,
-      isVideoEnabled: participant.videoTrackPublications.isNotEmpty,
-      isScreenSharing: false,
+      // isCameraEnabled() = publication caméra présente ET non mutée :
+      // évite l'écran noir quand la caméra est coupée (on affiche l'avatar).
+      isVideoEnabled: participant.isCameraEnabled(),
+      // Détection réelle du partage d'écran (publication screenShareVideo).
+      isScreenSharing: participant.isScreenShareEnabled(),
       hasHandRaised: participant.metadata?.contains('hand_raised') ?? false,
       audioLevel: existingState?.audioLevel ?? 0.0,
       lastActiveTime: existingState?.lastActiveTime ?? DateTime.now(),
@@ -234,6 +237,11 @@ class ConferenceLayoutController extends ChangeNotifier {
   }
 
   SpeakerMode determineOptimalMode() {
+    // Garde-fou : `values.first` sur une map vide lèverait un StateError.
+    if (_participantStates.isEmpty) {
+      return SpeakerMode.gallery;
+    }
+
     final screenSharingParticipant = _participantStates.values.firstWhere(
       (p) => p.isScreenSharing,
       orElse: () => _participantStates.values.first,

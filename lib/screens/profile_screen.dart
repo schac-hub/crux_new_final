@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io';
+import '../utils/local_file.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -83,11 +83,10 @@ class _ProfileScreenState extends State<ProfileScreen>
       setState(() => _isUpdatingPhoto = true);
 
       final appDir = await _getAppDocDir();
-      final dir = Directory(appDir);
-      if (!dir.existsSync()) dir.createSync(recursive: true);
+      await createLocalDir(appDir);
 
       final dest = '$appDir/profile_photo.jpg';
-      final file = await File(picked.path).copy(dest);
+      await copyLocalFile(picked.path, dest);
       await UserService.instance.setLocalPhotoPath(dest);
 
       if (mounted) {
@@ -105,8 +104,9 @@ class _ProfileScreenState extends State<ProfileScreen>
 
       final uid = _auth.currentUser?.uid;
       if (uid != null) {
-        final bytes = await file.readAsBytes();
-        final b64 = base64Encode(bytes);
+        final bytes = await readLocalFileBytes(picked.path);
+        final b64 = bytes != null ? base64Encode(bytes) : null;
+        if (b64 == null) return;
         UserService.instance
             .saveProfile(uid: uid, photoBase64: b64)
             .catchError((_) {});
@@ -128,7 +128,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     await UserService.instance.removeLocalPhotoPath();
     if (_localPhotoPath != null) {
       try {
-        await File(_localPhotoPath!).delete();
+        await deleteLocalFile(_localPhotoPath!);
       } catch (_) {}
     }
     final uid = _auth.currentUser?.uid;
@@ -680,8 +680,8 @@ class _ProfileScreenState extends State<ProfileScreen>
           ),
         ),
       );
-    } else if (_localPhotoPath != null && File(_localPhotoPath!).existsSync()) {
-      photo = Image.file(File(_localPhotoPath!), fit: BoxFit.cover);
+    } else if (localFileExists(_localPhotoPath ?? '')) {
+      photo = Image(image: localFileImage(_localPhotoPath!)!, fit: BoxFit.cover);
     } else {
       photo = Container(
         color: AppColors.surfaceElevated,

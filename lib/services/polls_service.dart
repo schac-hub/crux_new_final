@@ -28,47 +28,70 @@ class PollsService {
   final StreamController<List<QAQuestion>> _qaController =
       StreamController<List<QAQuestion>>.broadcast();
 
+  // Temps réel Firestore : source de vérité partagée entre appareils.
+  String? _activeMeetingId;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _pollsSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _qaSub;
+
   // Getters
   List<Poll> get activePolls => List.unmodifiable(_activePolls);
   List<QAQuestion> get qaQuestions => List.unmodifiable(_qaQuestions);
   Stream<List<Poll>> get pollsStream => _pollsController.stream;
   Stream<List<QAQuestion>> get qaStream => _qaController.stream;
 
-  /// Initialise le service
-  Future<void> initialize() async {
-    await _loadActivePolls();
-    await _loadQAQuestions();
-    _logger.i('PollsService initialized');
+  /// Initialise le service.
+  ///
+  /// [meetingId] (optionnel) branche l'écoute temps réel Firestore des
+  /// sondages et questions de la réunion : sans lui, le service reste
+  /// limité à l'état local de l'appareil.
+  Future<void> initialize({String? meetingId}) async {
+    if (meetingId != null && meetingId.trim().isNotEmpty) {
+      final mid = meetingId.trim();
+      if (mid != _activeMeetingId) {
+        _activeMeetingId = mid;
+        _subscribeToFirestore(mid);
+      }
+    }
+    _logger.i('PollsService initialized (meeting: ${_activeMeetingId ?? 'local'})');
   }
 
-  /// Charge les sondages actifs
-  Future<void> _loadActivePolls() async {
-    try {
-      final userId = _auth.currentUser?.uid;
-      if (userId == null) return;
+  void _subscribeToFirestore(String meetingId) {
+    _pollsSub?.cancel();
+    _qaSub?.cancel();
 
-      // En production, charger depuis Firestore
-      // Pour l'instant, initialiser vide
-      _activePolls.clear();
-      _pollsController.add(_activePolls);
-    } catch (e) {
-      _logger.e('Failed to load active polls', error: e);
-    }
-  }
+    _pollsSub = _firestore
+        .collection('polls')
+        .where('meetingId', isEqualTo: meetingId)
+        .snapshots()
+        .listen(
+          (snap) {
+            final polls =
+                snap.docs.map((d) => Poll.fromJson(d.data())).toList()
+                  ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+            _activePolls
+              ..clear()
+              ..addAll(polls);
+            _pollsController.add(List.from(_activePolls));
+          },
+          onError: (e) => _logger.e('Polls stream error', error: e),
+        );
 
-  /// Charge les questions Q&A
-  Future<void> _loadQAQuestions() async {
-    try {
-      final userId = _auth.currentUser?.uid;
-      if (userId == null) return;
-
-      // En production, charger depuis Firestore
-      // Pour l'instant, initialiser vide
-      _qaQuestions.clear();
-      _qaController.add(_qaQuestions);
-    } catch (e) {
-      _logger.e('Failed to load QA questions', error: e);
-    }
+    _qaSub = _firestore
+        .collection('qa_questions')
+        .where('meetingId', isEqualTo: meetingId)
+        .snapshots()
+        .listen(
+          (snap) {
+            final questions =
+                snap.docs.map((d) => QAQuestion.fromJson(d.data())).toList()
+                  ..sort((a, b) => b.upvotes.compareTo(a.upvotes));
+            _qaQuestions
+              ..clear()
+              ..addAll(questions);
+            _qaController.add(List.from(_qaQuestions));
+          },
+          onError: (e) => _logger.e('QA stream error', error: e),
+        );
   }
 
   /// Crée un nouveau sondage
@@ -114,7 +137,7 @@ class PollsService {
     }
   }
 
-  /// Répond à un sondage
+  /// Répond à un sondage (transaction : comptage atomique multi-appareils).
   Future<void> respondToPoll({
     required String pollId,
     required List<String> selectedOptionIds,
@@ -123,51 +146,67 @@ class PollsService {
       final userId = _auth.currentUser?.uid;
       if (userId == null) throw Exception('User not authenticated');
 
-      final pollIndex = _activePolls.indexWhere((p) => p.id == pollId);
-      if (pollIndex == -1) throw Exception('Poll not found');
-
-      final poll = _activePolls[pollIndex];
-
-      // Vérifier si l'utilisateur a déjà répondu
-      if (poll.responses.containsKey(userId)) {
-        throw Exception('Already responded to this poll');
+      if (selectedOptionIds.isEmpty) {
+        throw Exception('No option selected');
       }
 
-      // Vérifier les contraintes
-      if (!poll.allowMultipleAnswers && selectedOptionIds.length > 1) {
-        throw Exception('Multiple answers not allowed');
-      }
+      await _firestore.runTransaction<void>((transaction) async {
+        final doc = await transaction.get(
+          _firestore.collection('polls').doc(pollId),
+        );
 
-      // Enregistrer la réponse
-      final response = PollResponse(
-        userId: userId,
-        selectedOptionIds: selectedOptionIds,
-        respondedAt: DateTime.now(),
-      );
+        if (!doc.exists || doc.data() == null) {
+          throw Exception('Poll not found');
+        }
 
-      // Mettre à jour les options
-      final updatedOptions =
-          poll.options.map((option) {
-            if (selectedOptionIds.contains(option.id)) {
-              return PollOption(
-                id: option.id,
-                text: option.text,
-                votes: option.votes + 1,
-              );
-            }
-            return option;
-          }).toList();
+        final fresh = Poll.fromJson(doc.data()!);
 
-      final updatedPoll = poll.copyWith(
-        options: updatedOptions,
-        responses: {...poll.responses, userId: response},
-        totalResponses: poll.totalResponses + 1,
-      );
+        if (!fresh.isActive) throw Exception('Poll is closed');
 
-      await _savePoll(updatedPoll);
-      _activePolls[pollIndex] = updatedPoll;
-      _pollsController.add(List.from(_activePolls));
+        if (fresh.responses.containsKey(userId)) {
+          throw Exception('Already responded to this poll');
+        }
 
+        if (!fresh.allowMultipleAnswers && selectedOptionIds.length > 1) {
+          throw Exception('Multiple answers not allowed');
+        }
+
+        final validIds = fresh.options.map((o) => o.id).toSet();
+        if (!selectedOptionIds.every(validIds.contains)) {
+          throw Exception('Invalid option');
+        }
+
+        final updatedOptions =
+            fresh.options
+                .map(
+                  (option) =>
+                      selectedOptionIds.contains(option.id)
+                          ? PollOption(
+                            id: option.id,
+                            text: option.text,
+                            votes: option.votes + 1,
+                          )
+                          : option,
+                )
+                .toList();
+
+        final updated = fresh.copyWith(
+          options: updatedOptions,
+          responses: {
+            ...fresh.responses,
+            userId: PollResponse(
+              userId: userId,
+              selectedOptionIds: selectedOptionIds,
+              respondedAt: DateTime.now(),
+            ),
+          },
+          totalResponses: fresh.totalResponses + 1,
+        );
+
+        transaction.set(doc.reference, updated.toJson());
+      });
+
+      // La diffusion temps réel propage le résultat à tous les appareils.
       _logger.i('User $userId responded to poll $pollId');
     } catch (e) {
       _logger.e('Failed to respond to poll', error: e);
@@ -178,17 +217,10 @@ class PollsService {
   /// Termine un sondage
   Future<void> endPoll(String pollId) async {
     try {
-      final pollIndex = _activePolls.indexWhere((p) => p.id == pollId);
-      if (pollIndex == -1) throw Exception('Poll not found');
-
-      final updatedPoll = _activePolls[pollIndex].copyWith(
-        isActive: false,
-        endedAt: DateTime.now(),
-      );
-
-      await _savePoll(updatedPoll);
-      _activePolls[pollIndex] = updatedPoll;
-      _pollsController.add(List.from(_activePolls));
+      await _firestore.collection('polls').doc(pollId).update({
+        'isActive': false,
+        'endedAt': DateTime.now().toIso8601String(),
+      });
 
       _logger.i('Ended poll $pollId');
     } catch (e) {
@@ -311,39 +343,28 @@ class PollsService {
     }
   }
 
-  /// Vote pour une question Q&A
+  /// Vote pour une question Q&A (arrayUnion/arrayRemove : atomique côté
+  /// Firestore, aucun écrasement concurrent entre appareils).
   Future<void> upvoteQuestion(String questionId) async {
     try {
       final userId = _auth.currentUser?.uid;
       if (userId == null) throw Exception('User not authenticated');
 
-      final questionIndex = _qaQuestions.indexWhere((q) => q.id == questionId);
-      if (questionIndex == -1) throw Exception('Question not found');
+      final question = _qaQuestions.firstWhere(
+        (q) => q.id == questionId,
+        orElse: () => throw Exception('Question not found'),
+      );
 
-      final question = _qaQuestions[questionIndex];
-      final upvoters = question.upvoters ?? [];
+      final alreadyVoted = (question.upvoters ?? []).contains(userId);
 
-      if (upvoters.contains(userId)) {
-        // Retirer le vote
-        upvoters.remove(userId);
-        final updatedQuestion = question.copyWith(
-          upvotes: question.upvotes - 1,
-          upvoters: upvoters,
-        );
-        await _saveQAQuestion(updatedQuestion);
-        _qaQuestions[questionIndex] = updatedQuestion;
-      } else {
-        // Ajouter le vote
-        upvoters.add(userId);
-        final updatedQuestion = question.copyWith(
-          upvotes: question.upvotes + 1,
-          upvoters: upvoters,
-        );
-        await _saveQAQuestion(updatedQuestion);
-        _qaQuestions[questionIndex] = updatedQuestion;
-      }
+      await _firestore.collection('qa_questions').doc(questionId).update({
+        'upvoters':
+            alreadyVoted
+                ? FieldValue.arrayRemove([userId])
+                : FieldValue.arrayUnion([userId]),
+        'upvotes': FieldValue.increment(alreadyVoted ? -1 : 1),
+      });
 
-      _qaController.add(List.from(_qaQuestions));
       _logger.i('Upvoted question $questionId');
     } catch (e) {
       _logger.e('Failed to upvote question', error: e);
@@ -397,6 +418,8 @@ class PollsService {
 
   /// Nettoie les ressources
   void dispose() {
+    _pollsSub?.cancel();
+    _qaSub?.cancel();
     _pollsController.close();
     _qaController.close();
     _logger.i('PollsService disposed');
