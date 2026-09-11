@@ -19,5 +19,5 @@
     <!-- Thème au niveau application, utilisé par toute future Activity native
          (Compose) qui ne définit pas son propre thème. MainActivity garde son
          propre android:theme="@style/LaunchTheme" et n'est donc pas affectée. -->
-    <style name="Theme.Crux" parent="@style/Theme.Material3.DayNight.NoActionBar" />
+    <style name="Theme.Crux" parent="Theme.AppCompat.DayNight.NoActionBar" />
 </resources>

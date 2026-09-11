@@ -5,6 +5,7 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const admin = require('firebase-admin');
 const { AccessToken } = require('livekit-server-sdk');
+const { body, param, query, validationResult } = require('express-validator');
 
 // ============================================================
 // Firebase Admin Initialization
@@ -127,109 +128,20 @@ async function verifyFirebaseToken(req, res, next) {
 }
 
 // ============================================================
-// Input Validation Helpers
+// Validation Middleware
 // ============================================================
-function validateMeetingInput(data) {
-  const errors = [];
-  
-  if (!data.title || typeof data.title !== 'string' || data.title.trim().length === 0) {
-    errors.push('Title is required and must be a non-empty string');
+function handleValidationErrors(req, res, next) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ 
+      error: 'Validation failed', 
+      details: errors.array().map(err => ({
+        field: err.path,
+        message: err.msg
+      }))
+    });
   }
-  if (data.title && data.title.length > 200) {
-    errors.push('Title must be less than 200 characters');
-  }
-  
-  if (data.description && typeof data.description !== 'string') {
-    errors.push('Description must be a string');
-  }
-  if (data.description && data.description.length > 1000) {
-    errors.push('Description must be less than 1000 characters');
-  }
-  
-  if (!data.organizerName || typeof data.organizerName !== 'string' || data.organizerName.trim().length === 0) {
-    errors.push('Organizer name is required and must be a non-empty string');
-  }
-  if (data.organizerName && data.organizerName.length > 100) {
-    errors.push('Organizer name must be less than 100 characters');
-  }
-  
-  if (data.passcode !== undefined && data.passcode !== null) {
-    if (typeof data.passcode !== 'string') {
-      errors.push('Passcode must be a string');
-    } else if (data.passcode.length > 0) {
-      if (data.passcode.length < 4 || data.passcode.length > 6) {
-        errors.push('Passcode must be 4-6 characters');
-      }
-      if (!/^\d+$/.test(data.passcode)) {
-        errors.push('Passcode must contain only digits');
-      }
-    }
-  }
-  
-  if (data.isLargeConference !== undefined && typeof data.isLargeConference !== 'boolean') {
-    errors.push('isLargeConference must be a boolean');
-  }
-  
-  return errors;
-}
-
-function validateMeetingCode(code) {
-  const errors = [];
-  
-  if (!code || typeof code !== 'string') {
-    errors.push('Meeting code is required and must be a string');
-    return errors;
-  }
-  
-  const upperCode = code.toUpperCase();
-  if (!/^[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3}$/.test(upperCode)) {
-    errors.push('Meeting code must be in format XXX-XXX-XXX');
-  }
-  
-  return errors;
-}
-
-function validateMeetingId(id) {
-  const errors = [];
-  
-  if (!id || typeof id !== 'string') {
-    errors.push('Meeting ID is required and must be a string');
-    return errors;
-  }
-  
-  if (!/^[A-Z0-9]{12}$/.test(id)) {
-    errors.push('Meeting ID must be 12 alphanumeric characters');
-  }
-  
-  return errors;
-}
-
-function validateTokenParams(params) {
-  const errors = [];
-  
-  if (!params.room || typeof params.room !== 'string') {
-    errors.push('Room is required and must be a string');
-  } else if (params.room.length > 100) {
-    errors.push('Room must be less than 100 characters');
-  }
-  
-  if (!params.identity || typeof params.identity !== 'string') {
-    errors.push('Identity is required and must be a string');
-  } else if (params.identity.length > 100) {
-    errors.push('Identity must be less than 100 characters');
-  }
-  
-  if (!params.name || typeof params.name !== 'string') {
-    errors.push('Name is required and must be a string');
-  } else if (params.name.length > 100) {
-    errors.push('Name must be less than 100 characters');
-  }
-  
-  if (params.isHost !== undefined && params.isHost !== 'true' && params.isHost !== 'false') {
-    errors.push('isHost must be "true" or "false"');
-  }
-  
-  return errors;
+  next();
 }
 
 // ============================================================
@@ -336,19 +248,48 @@ function generateMeetingId() {
 }
 
 // POST /api/meetings - Create a new meeting
-app.post('/api/meetings', verifyFirebaseToken, async (req, res) => {
+app.post('/api/meetings', 
+  verifyFirebaseToken,
+  [
+    body('title')
+      .trim()
+      .notEmpty()
+      .withMessage('Title is required')
+      .isLength({ max: 200 })
+      .withMessage('Title must be less than 200 characters'),
+    body('description')
+      .optional()
+      .isString()
+      .withMessage('Description must be a string')
+      .isLength({ max: 1000 })
+      .withMessage('Description must be less than 1000 characters'),
+    body('organizerName')
+      .trim()
+      .notEmpty()
+      .withMessage('Organizer name is required')
+      .isLength({ max: 100 })
+      .withMessage('Organizer name must be less than 100 characters'),
+    body('passcode')
+      .optional()
+      .isString()
+      .withMessage('Passcode must be a string')
+      .isLength({ min: 4, max: 6 })
+      .withMessage('Passcode must be 4-6 characters')
+      .matches(/^\d+$/)
+      .withMessage('Passcode must contain only digits'),
+    body('isLargeConference')
+      .optional()
+      .isBoolean()
+      .withMessage('isLargeConference must be a boolean')
+  ],
+  handleValidationErrors,
+  async (req, res) => {
   try {
     const { title, description, organizerName, passcode, isLargeConference } = req.body;
     
     const userId = req.user?.uid;
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    // Validate input
-    const validationErrors = validateMeetingInput(req.body);
-    if (validationErrors.length > 0) {
-      return res.status(400).json({ error: 'Validation failed', details: validationErrors });
     }
 
     const meetingId = generateMeetingId();
@@ -392,16 +333,20 @@ app.post('/api/meetings', verifyFirebaseToken, async (req, res) => {
 });
 
 // GET /api/meetings/code/:code - Get meeting by code
-app.get('/api/meetings/code/:code', verifyFirebaseToken, async (req, res) => {
+app.get('/api/meetings/code/:code', 
+  verifyFirebaseToken,
+  [
+    param('code')
+      .trim()
+      .notEmpty()
+      .withMessage('Meeting code is required')
+      .matches(/^[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3}$/i)
+      .withMessage('Meeting code must be in format XXX-XXX-XXX')
+  ],
+  handleValidationErrors,
+  async (req, res) => {
   try {
     const { code } = req.params;
-    
-    // Validate meeting code
-    const validationErrors = validateMeetingCode(code);
-    if (validationErrors.length > 0) {
-      return res.status(400).json({ error: 'Validation failed', details: validationErrors });
-    }
-    
     const upperCode = code.toUpperCase();
 
     const snap = await db
@@ -428,15 +373,20 @@ app.get('/api/meetings/code/:code', verifyFirebaseToken, async (req, res) => {
 });
 
 // GET /api/meetings/:id - Get meeting by ID
-app.get('/api/meetings/:id', verifyFirebaseToken, async (req, res) => {
+app.get('/api/meetings/:id', 
+  verifyFirebaseToken,
+  [
+    param('id')
+      .trim()
+      .notEmpty()
+      .withMessage('Meeting ID is required')
+      .matches(/^[A-Z0-9]{12}$/)
+      .withMessage('Meeting ID must be 12 alphanumeric characters')
+  ],
+  handleValidationErrors,
+  async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // Validate meeting ID
-    const validationErrors = validateMeetingId(id);
-    if (validationErrors.length > 0) {
-      return res.status(400).json({ error: 'Validation failed', details: validationErrors });
-    }
 
     const doc = await db.collection('meetings').doc(id).get();
 
@@ -457,18 +407,23 @@ app.get('/api/meetings/:id', verifyFirebaseToken, async (req, res) => {
 });
 
 // PUT /api/meetings/:id/participants - Add participant to meeting
-app.put('/api/meetings/:id/participants', verifyFirebaseToken, async (req, res) => {
+app.put('/api/meetings/:id/participants', 
+  verifyFirebaseToken,
+  [
+    param('id')
+      .trim()
+      .notEmpty()
+      .withMessage('Meeting ID is required')
+      .matches(/^[A-Z0-9]{12}$/)
+      .withMessage('Meeting ID must be 12 alphanumeric characters')
+  ],
+  handleValidationErrors,
+  async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user?.uid;
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' });
-    }
-    
-    // Validate meeting ID
-    const validationErrors = validateMeetingId(id);
-    if (validationErrors.length > 0) {
-      return res.status(400).json({ error: 'Validation failed', details: validationErrors });
     }
 
     await db.collection('meetings').doc(id).update({
@@ -490,12 +445,6 @@ app.put('/api/meetings/:id/participants', verifyFirebaseToken, async (req, res) 
 async function handleTokenRequest(req, res) {
   try {
     const { room, identity, name, isHost } = req.query;
-
-    // Validate token parameters
-    const validationErrors = validateTokenParams(req.query);
-    if (validationErrors.length > 0) {
-      return res.status(400).json({ error: 'Validation failed', details: validationErrors });
-    }
 
     // 🔒 Contrôle d'identité strict : identity === uid Firebase
     const uid = req.user?.uid;
@@ -556,8 +505,67 @@ async function handleTokenRequest(req, res) {
 }
 
 // Deux routes compatibles : ancienne (racine) + nouvelle (/api)
-app.get('/livekit-token', verifyFirebaseToken, tokenLimiter, handleTokenRequest);
-app.get('/api/livekit-token', verifyFirebaseToken, tokenLimiter, handleTokenRequest);
+app.get('/livekit-token', 
+  verifyFirebaseToken, 
+  tokenLimiter,
+  [
+    query('room')
+      .trim()
+      .notEmpty()
+      .withMessage('Room is required')
+      .isLength({ max: 100 })
+      .withMessage('Room must be less than 100 characters'),
+    query('identity')
+      .trim()
+      .notEmpty()
+      .withMessage('Identity is required')
+      .isLength({ max: 100 })
+      .withMessage('Identity must be less than 100 characters'),
+    query('name')
+      .trim()
+      .notEmpty()
+      .withMessage('Name is required')
+      .isLength({ max: 100 })
+      .withMessage('Name must be less than 100 characters'),
+    query('isHost')
+      .optional()
+      .isIn(['true', 'false'])
+      .withMessage('isHost must be "true" or "false"')
+  ],
+  handleValidationErrors,
+  handleTokenRequest
+);
+
+app.get('/api/livekit-token', 
+  verifyFirebaseToken, 
+  tokenLimiter,
+  [
+    query('room')
+      .trim()
+      .notEmpty()
+      .withMessage('Room is required')
+      .isLength({ max: 100 })
+      .withMessage('Room must be less than 100 characters'),
+    query('identity')
+      .trim()
+      .notEmpty()
+      .withMessage('Identity is required')
+      .isLength({ max: 100 })
+      .withMessage('Identity must be less than 100 characters'),
+    query('name')
+      .trim()
+      .notEmpty()
+      .withMessage('Name is required')
+      .isLength({ max: 100 })
+      .withMessage('Name must be less than 100 characters'),
+    query('isHost')
+      .optional()
+      .isIn(['true', 'false'])
+      .withMessage('isHost must be "true" or "false"')
+  ],
+  handleValidationErrors,
+  handleTokenRequest
+);
 
 // ============================================================
 // 404

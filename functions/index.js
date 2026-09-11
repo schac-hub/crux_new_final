@@ -104,11 +104,12 @@ exports.createPayment = onCall(
 
       if (response.data.response_code === '00') {
         // Enregistrer la transaction en attente dans Firestore
+        // Note: paydunyaToken is stored for webhook verification but should never be returned in API responses
         await db.collection('payments').add({
           userId,
           userName: userName ?? '',
           userEmail: userEmail ?? '',
-          paydunyaToken: response.data.token,
+          paydunyaToken: response.data.token, // Sensitive: only for internal webhook verification
           invoiceUrl: response.data.invoice_url,
           status: 'pending',
           amount: 25000,
