@@ -122,10 +122,35 @@ class AuthService {
           ..addScope('https://www.googleapis.com/auth/userinfo.profile')
           ..setCustomParameters({'prompt': 'select_account'});
 
-        final cred = await _auth
-            .signInWithPopup(provider)
-            .timeout(const Duration(seconds: 30));
-        user = cred.user;
+        try {
+          final cred = await _auth
+              .signInWithPopup(provider)
+              .timeout(const Duration(seconds: 30));
+          user = cred.user;
+        } on FirebaseAuthException catch (e) {
+          // Popup bloquée par le navigateur ou environnement restreint :
+          // on retente via redirection pleine page.
+          if (e.code == 'popup-blocked' ||
+              e.code == 'popup-closed-by-user' ||
+              e.code == 'operation-not-supported-in-this-environment' ||
+              e.code == 'cancelled-popup-request') {
+            rethrow;
+          }
+          // Domaine non autorisé (ex. GitHub Pages non déclaré dans la
+          // Firebase Console) : message explicite plutôt qu'une erreur brute.
+          if (e.code == 'auth/unauthorized-domain' ||
+              e.code == 'unauthorized-domain') {
+            throw Exception(
+              'Ce domaine n\'est pas autorisé dans Firebase. Ajoutez-le dans '
+              'Authentication → Settings → Authorized domains.',
+            );
+          }
+          rethrow;
+        } on TimeoutException {
+          // Popup trop lente : redirection complète en dernier recours.
+          await _auth.signInWithRedirect(provider);
+          return null; // Le résultat arrive après le rechargement de page.
+        }
       } else {
         // ── ANDROID / iOS : GoogleSignIn → credential ─────────────────
         final googleUser = await _googleSignIn.signIn().timeout(

@@ -6,6 +6,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'dart:typed_data';
 
 import '../models/user_model.dart';
+import '../screens/create_meeting_screen.dart';
+import '../screens/meetings_history_screen.dart';
 import '../services/meeting_service.dart';
 import '../wallpaper/wallpaper_provider.dart';
 import '../routes/app_routes.dart';
@@ -87,37 +89,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _startInstant() async {
-    try {
-      // 1. Créer la réunion dans Firestore (le service retourne le modèle
-      //    complet : id + meetingCode, sans re-lire le document).
-      final meeting = await MeetingService().createMeeting(
-        title: 'Réunion instantanée',
-        description: '',
-        organizerName: _displayName,
-        isLargeConference: false,
-      );
-
-      if (!mounted) return;
-
-      // 2. Naviguer vers l'écran de réunion avec l'ID + le code
-      Navigator.of(context).pushNamed(
-        AppRoutes.meeting,
-        arguments: {
-          'meetingId': meeting.id,
-          'meetingCode': meeting.meetingCode,
-          'meetingName': meeting.title,
-          'userId': _uid,
-          'userName': _displayName,
-          'userEmail': widget.user.email,
-          'isHost': true,
-        },
-      );
-    } catch (e) {
-      logger.e('Échec création réunion instantanée', error: e);
-      if (mounted) {
-        _snack('Impossible de créer la réunion : $e');
-      }
-    }
+    // Google Meet : « Démarrer » ouvre d'abord le formulaire (titre +
+    // description), pas de réunion au nom figé.
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const CreateMeetingScreen()),
+    );
   }
   
   void _joinMeeting(MeetingModel meeting) {
@@ -441,10 +418,14 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (index) {
       case 0: // Home
         break;
-      case 1: // Meetings
-        Navigator.of(
-          context,
-        ).pushNamed(AppRoutes.schedule).then((_) => _loadProfilePhoto());
+      case 1: // Meetings → réunions récentes + historique (pas la planification)
+        Navigator.of(context)
+            .push(
+              MaterialPageRoute(
+                builder: (_) => MeetingsHistoryScreen(userId: _uid),
+              ),
+            )
+            .then((_) => _loadProfilePhoto());
         setState(() => _selectedNav = 0);
         break;
       case 2: // Settings

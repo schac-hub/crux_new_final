@@ -79,6 +79,9 @@ dependencies:
   package_info_plus: ^8.3.0
   uuid: ^4.5.1
 
+  # API web moderne (remplace dart:html) : téléchargement de fichiers sur web
+  web: ^1.1.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

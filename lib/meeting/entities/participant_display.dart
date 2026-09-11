@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:livekit_client/livekit_client.dart';
 
 enum ParticipantDisplayMode { speaker, tile, hidden, minimized }
@@ -46,8 +48,22 @@ class ParticipantDisplayState {
   }
 
   String get participantId => participant.sid;
-  String get displayName =>
-      participant.name.isEmpty ? 'Anonymous' : participant.name;
+  String get displayName {
+    if (participant.name.isNotEmpty) return participant.name;
+    // Les métadonnées embarquent le nom ('name') : évite « Anonymous »
+    // quand la connexion LiveKit n'a pas propagé le nom du token.
+    try {
+      final metadata = participant.metadata;
+      if (metadata != null && metadata.isNotEmpty) {
+        final decoded = jsonDecode(metadata);
+        if (decoded is Map<String, dynamic>) {
+          final name = decoded['name']?.toString() ?? '';
+          if (name.isNotEmpty) return name;
+        }
+      }
+    } catch (_) {}
+    return 'Anonymous';
+  }
   String get initials {
     final name = displayName;
     if (name.isEmpty) return '?';

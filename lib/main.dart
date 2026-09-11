@@ -125,14 +125,25 @@ void main() {
         crux.logger.e('Notification Service crash', error: e);
       }
 
+      _appRunning = true;
       runApp(const MyApp());
     },
     (error, stack) {
       crux.logger.e('Global App Crash', error: error, stackTrace: stack);
-      runApp(_ErrorApp(title: 'Startup Error', message: error.toString()));
+      // Une erreur asynchrone non capturée PENDANT l'exécution (chat, réunion,
+      // Firestore...) ne doit pas remplacer toute l'app par l'écran « Startup
+      // Error » : on journalise et on laisse l'app continuer. L'écran d'erreur
+      // reste réservé aux échecs de démarrage.
+      if (!_appRunning) {
+        runApp(_ErrorApp(title: 'Startup Error', message: error.toString()));
+      }
     },
   );
 }
+
+/// Devient true dès que [MyApp] est lancée : les erreurs suivantes sont
+/// loguées sans détruire l'interface (stabilité web en réunion).
+bool _appRunning = false;
 
 // ============================================================
 // CORRIGÉ (bug #7) : _ErrorApp avec boutons fonctionnels
@@ -324,6 +335,15 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
   Future<void> _initDeepLinks() async {
     try {
+      // Web : au chargement, Uri.base peut déjà contenir #/join/CODE alors
+      // qu'aucun événement app_links n'est émis — on l'analyse directement.
+      if (kIsWeb) {
+        final current = Uri.base;
+        if (current.fragment.contains('/join/') ||
+            current.pathSegments.contains('join')) {
+          _handleDeepLink(current);
+        }
+      }
       _deepLinkSubscription = _appLinks.uriLinkStream.listen(
         (uri) => _handleDeepLink(uri),
       );
@@ -344,6 +364,15 @@ class _AuthWrapperState extends State<AuthWrapper> {
         uri.pathSegments.length >= 2 &&
         uri.pathSegments[uri.pathSegments.length - 2] == 'join') {
       meetingId = uri.pathSegments.last;
+    }
+
+    // Lien web GitHub Pages à fragment : .../#/join/CODE
+    if (meetingId == null && uri.fragment.isNotEmpty) {
+      final frag = Uri.parse(uri.fragment);
+      if (frag.pathSegments.length >= 2 &&
+          frag.pathSegments[frag.pathSegments.length - 2] == 'join') {
+        meetingId = frag.pathSegments.last;
+      }
     }
 
     if (meetingId == null || meetingId.isEmpty) return;

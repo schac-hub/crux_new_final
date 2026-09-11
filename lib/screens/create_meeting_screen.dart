@@ -22,6 +22,7 @@ class CreateMeetingScreen extends StatefulWidget {
 
 class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
   final _titleCtrl = TextEditingController();
+  final _descCtrl = TextEditingController();
   final _passcodeCtrl = TextEditingController();
   bool _showPasscode = false;
   bool _loading = false;
@@ -30,6 +31,7 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
   @override
   void dispose() {
     _titleCtrl.dispose();
+    _descCtrl.dispose();
     _passcodeCtrl.dispose();
     super.dispose();
   }
@@ -76,7 +78,7 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
       // Create meeting directly via Firestore (backend removed to avoid failures)
       final meeting = await MeetingService().createMeeting(
         title: title,
-        description: '',
+        description: _descCtrl.text.trim(),
         organizerName: _displayName(),
         organizerId: current.uid,
         passcode: passcode.isNotEmpty ? passcode : null,
@@ -197,6 +199,40 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
                 ),
               ),
               const SizedBox(height: 20),
+              Text(
+                'Description (optionnelle)',
+                style: GoogleFonts.poppins(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _descCtrl,
+                maxLines: 3,
+                minLines: 1,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Ex. Point hebdo avec l\'équipe produit',
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  filled: true,
+                  fillColor: AppColors.surfaceVariant,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: AppColors.border),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: AppColors.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: AppColors.primary),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 activeTrackColor: AppColors.primary,

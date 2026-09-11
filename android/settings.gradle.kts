@@ -32,7 +32,9 @@ plugins {
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    // PREFER_PROJECT : le plugin Gradle Flutter ajoute un dépôt maven au
+    // projet ; FAIL_ON_PROJECT_REPOS faisait échouer l'application du plugin.
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
     repositories {
         google()
         mavenCentral()

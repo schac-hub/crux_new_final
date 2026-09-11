@@ -31,6 +31,7 @@ import '../services/polls_service.dart';
 import '../services/pro_service.dart';
 import '../services/recording_service.dart';
 import '../theme/colors.dart';
+import '../utils/download_file.dart';
 import '../utils/logger.dart';
 import '../meeting/crux_conference_view.dart';
 import '../meeting/entities/speaker_state.dart';
@@ -1153,6 +1154,11 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       setState(() {
         _camOn = next;
       });
+
+      // Force la mise à jour de la tuile locale : sans cela l'avatar
+      // persistait alors que la caméra venait de s'activer.
+      context.read<MeetingStateProvider>().updateParticipant(local);
+      _refreshParticipants();
     } catch (e) {
       logger.w('Camera toggle failed', error: e);
     }
@@ -2903,11 +2909,14 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                     });
                   },
                 ),
-                _ControlButton(
-                  icon: Icons.screen_share_outlined,
-                  active: _screenSharing,
-                  onTap: _toggleScreenShare,
-                ),
+                // Partage d'écran : réservé au web (getDisplayMedia). Sur
+                // mobile, MediaProjection fait planter l'app.
+                if (kIsWeb)
+                  _ControlButton(
+                    icon: Icons.screen_share_outlined,
+                    active: _screenSharing,
+                    onTap: _toggleScreenShare,
+                  ),
                 _ControlButton(
                   icon: Icons.back_hand_outlined,
                   active: _handRaised,
@@ -3165,12 +3174,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
     return _Panel(
       title: 'Notes de réunion',
       onClose: () async {
-        await NoteService.instance.saveMeetingNote(
-          userId: widget.userId,
-          meetingId: widget.meetingId,
-          meetingName: widget.meetingName,
-          content: _noteController.text,
-        );
+        await _saveNotes();
 
         if (!mounted) return;
 
@@ -3178,22 +3182,126 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
           _showNotes = false;
         });
       },
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: TextField(
-          controller: _noteController,
-          maxLines: null,
-          expands: true,
-          textAlignVertical: TextAlignVertical.top,
-          style: const TextStyle(color: Colors.white, height: 1.5),
-          decoration: const InputDecoration(
-            hintText: 'Écrivez vos notes...',
-            hintStyle: TextStyle(color: Colors.white24),
-            border: InputBorder.none,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _saveNotes,
+                    icon: const Icon(Icons.save_outlined, size: 18),
+                    label: const Text('Sauvegarder'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _exportNotes,
+                    icon: const Icon(Icons.ios_share, size: 18),
+                    label: const Text('Exporter'),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: TextField(
+                controller: _noteController,
+                maxLines: null,
+                expands: true,
+                textAlignVertical: TextAlignVertical.top,
+                style: const TextStyle(color: Colors.white, height: 1.5),
+                decoration: const InputDecoration(
+                  hintText: 'Écrivez vos notes...',
+                  hintStyle: TextStyle(color: Colors.white24),
+                  border: InputBorder.none,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  Future<void> _saveNotes() async {
+    try {
+      await NoteService.instance.saveMeetingNote(
+        userId: widget.userId,
+        meetingId: widget.meetingId,
+        meetingName: widget.meetingName,
+        content: _noteController.text,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Notes sauvegardées ✓ (visibles dans l\'historique)'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      logger.w('Save notes failed', error: e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sauvegarde impossible : $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportNotes() async {
+    final content = _noteController.text.trim();
+    if (content.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Aucune note à exporter'),
+          backgroundColor: AppColors.surfaceElevated,
+        ),
+      );
+      return;
+    }
+
+    final header = 'CRUX — ${widget.meetingName}\n'
+        'Code : ${widget.meetingCode ?? widget.meetingId}\n'
+        'Date : ${DateTime.now().toLocal()}\n'
+        '${'-' * 40}\n\n';
+
+    try {
+      final savedPath = await exportTextFile(
+        'crux_notes_${widget.meetingId}.txt',
+        header + content,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              savedPath != null
+                  ? 'Notes exportées : $savedPath'
+                  : 'Notes téléchargées ✓',
+            ),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      logger.w('Export notes failed', error: e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Export impossible : $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
   }
 
   // ===========================================================================
@@ -4332,8 +4440,14 @@ class _ChatBubble extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 340),
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.all(12),
+        // AppColors.primary est BLANC dans le thème Obsidian : un texte blanc
+        // dessus était illisible (bulles « blanchies » sur web). On force des
+        // contrastes explicites quel que soit le thème.
         decoration: BoxDecoration(
-          color: isMe ? AppColors.primary : Colors.white10,
+          color:
+              isMe
+                  ? AppColors.primary
+                  : Colors.white.withValues(alpha: 0.10),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
@@ -4350,7 +4464,11 @@ class _ChatBubble extends StatelessWidget {
               ),
             Text(
               message.message,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
+              style: TextStyle(
+                color: isMe ? AppColors.textOnPrimary : Colors.white,
+                fontSize: 13,
+                height: 1.35,
+              ),
             ),
             if (message.fileUrl != null)
               Padding(

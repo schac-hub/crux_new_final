@@ -232,7 +232,15 @@ class _MeetingScreenState extends State<MeetingScreen> {
             ),
       ),
     ).then((_) async {
-      await _meetingService.removeParticipant(widget.meetingId, widget.userId);
+      // On reste dans `participants` : la réunion doit rester rejoignable
+      // depuis l'accueil tant qu'elle n'est pas terminée (comportement
+      // Google Meet). On nettoie uniquement la présence temps réel.
+      try {
+        await _meetingService.removePresence(
+          widget.meetingId,
+          widget.userId,
+        );
+      } catch (_) {}
 
       if (mounted) {
         Navigator.pop(context);

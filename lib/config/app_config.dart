@@ -14,7 +14,8 @@ class AppConfig {
 
   static const String appBaseUrl = String.fromEnvironment(
     'APP_BASE_URL',
-    defaultValue: 'https://crux-3c6be.web.app',
+    // Le site web est déployé sur GitHub Pages (cf. deploy-web.yml).
+    defaultValue: 'https://schac-hub.github.io/crux_new_final',
   );
 
   static const String appVersion = '2.39.0';
@@ -128,7 +129,9 @@ class AppConfig {
   }
 
   static String webJoinLink(String meetingId) {
-    return '$appBaseUrl/join/$meetingId';
+    // Fragment #/join/... : fiable sur GitHub Pages (pas de 404 SPA) et
+    // interprété par l'app au démarrage pour rejoindre directement.
+    return '$appBaseUrl/#/join/$meetingId';
   }
 
   static String? parseMeetingId(String link) {
@@ -144,6 +147,15 @@ class AppConfig {
       }
 
       return uri.pathSegments.last;
+    }
+
+    // Lien web à fragment : .../#/join/CODE
+    if (uri.fragment.isNotEmpty) {
+      final fragSegments = Uri.parse(uri.fragment).pathSegments;
+      final idx = fragSegments.indexOf(deepLinkHost);
+      if (idx != -1 && idx < fragSegments.length - 1) {
+        return fragSegments.last;
+      }
     }
 
     if (uri.pathSegments.isEmpty) {

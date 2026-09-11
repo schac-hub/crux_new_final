@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'entities/speaker_state.dart';
@@ -43,6 +45,18 @@ class ConferenceLayoutController extends ChangeNotifier {
   }
 
   void updateParticipant(Participant participant) {
+    // Une reconnexion (même identité Firebase, nouveau sid) ne doit pas
+    // créer une tuile fantôme en plus : l'entrée la plus récente remplace
+    // l'ancienne (2 écrans identiques quand on est seul).
+    final identity = participant.identity;
+    if (identity.isNotEmpty) {
+      _participantStates.removeWhere(
+        (_, s) =>
+            s.participant.identity == identity &&
+            s.participant.sid != participant.sid,
+      );
+    }
+
     final existingState = _participantStates[participant.sid];
     final newState = ParticipantDisplayState(
       participant: participant,
@@ -53,13 +67,30 @@ class ConferenceLayoutController extends ChangeNotifier {
       isVideoEnabled: participant.isCameraEnabled(),
       // Détection réelle du partage d'écran (publication screenShareVideo).
       isScreenSharing: participant.isScreenShareEnabled(),
-      hasHandRaised: participant.metadata?.contains('hand_raised') ?? false,
+      hasHandRaised: _metadataHandRaised(participant),
       audioLevel: existingState?.audioLevel ?? 0.0,
       lastActiveTime: existingState?.lastActiveTime ?? DateTime.now(),
     );
 
     _participantStates[participant.sid] = newState;
     notifyListeners();
+  }
+
+  /// Lit `hand_raised` dans les métadonnées JSON du participant.
+  ///
+  /// IMPORTANT : ne pas faire `metadata.contains('hand_raised')` — la clé
+  /// reste présente avec la valeur false quand on BAISSE la main, ce qui
+  /// rendait le badge impossible à désactiver.
+  static bool _metadataHandRaised(Participant participant) {
+    final metadata = participant.metadata;
+    if (metadata == null || metadata.isEmpty) return false;
+    try {
+      final decoded = jsonDecode(metadata);
+      if (decoded is Map<String, dynamic>) {
+        return decoded['hand_raised'] == true;
+      }
+    } catch (_) {}
+    return false;
   }
 
   void removeParticipant(String participantId) {
