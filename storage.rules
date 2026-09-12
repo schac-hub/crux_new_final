@@ -1,0 +1,38 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isMeetingParticipant(meetingId) {
+      let meeting = firestore.get(/databases/(default)/documents/meetings/$(meetingId));
+      return meeting != null && (
+        meeting.data.organizerId == request.auth.uid
+        || (meeting.data.coHosts != null && meeting.data.coHosts.hasAny([request.auth.uid]))
+        || (meeting.data.participants != null && meeting.data.participants.hasAny([request.auth.uid]))
+      );
+    }
+
+    // Fichiers partagés dans le chat de réunion (photos, documents)
+    match /meetings/{meetingId}/files/{fileName} {
+      allow read: if isSignedIn() && isMeetingParticipant(meetingId);
+      allow write: if isSignedIn()
+                   && isMeetingParticipant(meetingId)
+                   && request.resource.size < 50 * 1024 * 1024
+                   && request.resource.contentType.matches(
+                        'image/.*|application/pdf|text/plain|application/msword|application/vnd.*');
+      allow delete: if isSignedIn() && isMeetingParticipant(meetingId);
+    }
+
+    // Photos de profil (upload par leur propriétaire, lecture publique)
+    match /users/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn()
+                   && request.auth.uid == userId
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+  }
+}

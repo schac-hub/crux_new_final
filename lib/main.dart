@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:app_links/app_links.dart';
 import 'utils/logger.dart' as crux;
 import 'services/notification_service.dart';
+import 'services/meeting_service.dart';
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
@@ -121,6 +122,42 @@ void main() {
         MeetingNotificationManager.instance.initialize().catchError(
           (e) => crux.logger.e('Meeting reminders init failed', error: e),
         );
+
+        // Toucher un rappel de réunion ouvre directement la réunion.
+        MeetingNotificationManager.onMeetingTap = (mid) async {
+          try {
+            final doc = await MeetingService().resolveMeetingDoc(mid);
+            final nav = MyApp.navigatorKey.currentState;
+            if (nav == null) return;
+            final current = FirebaseAuth.instance.currentUser;
+            if (current == null || current.isAnonymous) {
+              nav.push(
+                MaterialPageRoute(
+                  builder: (_) => GuestJoinScreen(meetingId: mid),
+                ),
+              );
+              return;
+            }
+            nav.push(
+              MaterialPageRoute(
+                builder:
+                    (_) => MeetingScreen(
+                      meetingId: doc?.id ?? mid,
+                      meetingCode: doc?.data()?['meetingCode'] as String?,
+                      meetingName:
+                          doc?.data()?['title'] as String? ?? 'Réunion',
+                      userId: current.uid,
+                      userName:
+                          current.displayName ?? current.email ?? 'Utilisateur',
+                      userEmail: current.email,
+                      isHost: false,
+                    ),
+              ),
+            );
+          } catch (e) {
+            crux.logger.e('Reminder tap navigation failed', error: e);
+          }
+        };
       } catch (e) {
         crux.logger.e('Notification Service crash', error: e);
       }
@@ -268,6 +305,10 @@ class MyApp extends StatelessWidget {
   const MyApp({super.key});
   static final _navigatorKey = GlobalKey<NavigatorState>();
 
+  /// Accès global au navigateur (tap sur un rappel de réunion → ouvrir la
+  /// réunion sans contexte Flutter disponible).
+  static GlobalKey<NavigatorState> get navigatorKey => _navigatorKey;
+
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
@@ -395,13 +436,11 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
   Future<void> _joinMeetingAsAuthenticatedUser(String meetingId) async {
     try {
-      final doc =
-          await FirebaseFirestore.instance
-              .collection('meetings')
-              .doc(meetingId)
-              .get();
+      // Le segment du lien peut être un CODE (réunions programmées :
+      // /join/ABC-DEFG-HIJ) et non un ID de document — on résout les deux.
+      final doc = await MeetingService().resolveMeetingDoc(meetingId);
       if (!mounted) return;
-      if (!doc.exists) {
+      if (doc == null) {
         ElegantToast.show(
           context,
           title: 'Erreur',
@@ -428,7 +467,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => GuestJoinScreen(meetingId: meetingId),
+              builder: (_) => GuestJoinScreen(meetingId: doc.id),
             ),
           );
         }
@@ -439,7 +478,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
         MaterialPageRoute(
           builder:
               (_) => MeetingScreen(
-                meetingId: meetingId,
+                meetingId: doc.id,
                 meetingCode: data['meetingCode'] as String?,
                 meetingName: data['title'] as String? ?? 'Réunion',
                 userId: current.uid,
@@ -527,10 +566,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
         final user = snapshot.data;
         if (user == null) return const LoginScreen();
 
+        // photoURL est propagé : avatar et tuiles de réunion l'affichent
+        // dès l'entrée (fix « Anonymous » / photo manquante).
         final userModel = UserModel(
           uid: user.uid,
           name: user.displayName ?? user.email?.split('@')[0] ?? 'Utilisateur',
           email: user.email ?? '',
+          profileImageUrl: user.photoURL,
         );
 
         if (_termsAccepted == true) return HomeScreen(user: userModel);

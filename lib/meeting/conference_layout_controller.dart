@@ -123,6 +123,8 @@ class ConferenceLayoutController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Épingle un participant : il passe en GRAND ÉCRAN (vue orateur fixe)
+  /// pour l'utilisateur local, indépendamment de qui parle.
   void pinParticipant(String participantId) {
     final participant = _participantStates[participantId]?.participant;
     if (participant != null) {
@@ -131,6 +133,9 @@ class ConferenceLayoutController extends ChangeNotifier {
         pinnedParticipantId: participantId,
         currentSpeaker: participant,
         speakerTimestamp: DateTime.now(),
+        // L'épinglage bascule en vue « grand écran » : c'est le comportement
+        // attendu (référence Meet) — toucher une tuile = la mettre en grand.
+        mode: SpeakerMode.single,
       );
       notifyListeners();
     }
@@ -140,6 +145,8 @@ class ConferenceLayoutController extends ChangeNotifier {
     _speakerState = _speakerState.copyWith(
       isPinned: false,
       pinnedParticipantId: null,
+      // Retour à la galerie après dé-épinglage.
+      mode: SpeakerMode.gallery,
     );
     _switchToNextSpeaker();
     notifyListeners();

@@ -49,6 +49,21 @@ class LiveKitService {
   /// Durée de validité du token sandbox (environ 15 minutes)
   static const Duration tokenValidity = Duration(minutes: 15);
 
+  /// Dernier échec détaillé (remonté à l'écran de réunion pour le diagnostic
+  /// « impossible de rejoindre » : quota Cloud, HTTP, réseau…).
+  String? lastError;
+
+  // ---------------------------------------------------------------------------
+  // CACHE DE TOKEN
+  // Les tokens sandbox sont valides ~15 minutes. Re-demander un token à chaque
+  // (re)connexion sature le quota de requêtes du sandbox (HTTP 429 → « impossible
+  // de rejoindre »). On réutilise donc le token courant tant qu'il est valide.
+  // ---------------------------------------------------------------------------
+
+  ConnectionDetails? _cachedDetails;
+
+  String? _cachedKey;
+
   // ===========================================================================
   // OBTENIR LES DÉTAILS DE CONNEXION
   // ===========================================================================
@@ -105,6 +120,29 @@ class LiveKitService {
       return null;
     }
 
+    // Chaque nouvelle demande repart d'un diagnostic vierge.
+    lastError = null;
+
+    // Token encore valide pour ce couple room/identité → réutilisation
+    // (marge de 2 minutes avant expiration).
+    final cacheKey = '$cleanRoom|$cleanIdentity';
+    final cached = _cachedDetails;
+    if (_cachedKey == cacheKey && cached != null) {
+      final expiresAt = cached.expiresAt;
+      final stillValid =
+          expiresAt == null ||
+          expiresAt.isAfter(
+            DateTime.now().add(const Duration(minutes: 2)),
+          );
+      if (stillValid) {
+        developer.log(
+          'LiveKit token cache hit (room=$cleanRoom)',
+          level: 800,
+        );
+        return cached;
+      }
+    }
+
     final uri = Uri.tryParse(endpoint);
 
     if (uri == null || !uri.hasScheme) {
@@ -143,6 +181,9 @@ class LiveKitService {
         final requestBody = jsonEncode({
           'room_name': cleanRoom,
           'participant_name': cleanIdentity,
+          // Le nom d'affichage voyage dans les métadonnées du token : les
+          // tuiles l'affichent dès la connexion (sinon « Anonymous »).
+          'metadata': jsonEncode({'name': cleanName}),
         });
 
         final response = await http
@@ -248,13 +289,23 @@ class LiveKitService {
           expiresAt = DateTime.now().add(Duration(seconds: expiresIn.toInt()));
         }
 
-        return ConnectionDetails(
+        // Le token sandbox ne renvoie pas toujours expiresIn : on retombe
+        // sur la validité documentée (~15 minutes).
+        expiresAt ??= DateTime.now().add(tokenValidity);
+
+        final details = ConnectionDetails(
           serverUrl: serverUrl,
           participantToken: participantToken,
           roomName: roomName ?? cleanRoom,
           participantName: participantName ?? cleanName,
           expiresAt: expiresAt,
         );
+
+        _cachedDetails = details;
+
+        _cachedKey = cacheKey;
+
+        return details;
       } on TimeoutException {
         _error(
           'LiveKit sandbox API request timed out after ${AppConfig.tokenTimeout.inSeconds}s.',
@@ -357,6 +408,8 @@ class LiveKitService {
   // ===========================================================================
 
   void _error(String message) {
+    lastError = message;
+
     developer.log('LiveKitService: $message', level: 1000);
   }
 }

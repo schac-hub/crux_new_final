@@ -927,9 +927,22 @@ class _HomeScreenState extends State<HomeScreen> {
         if (!snap.hasData || snap.data!.docs.isEmpty) {
           return _empty('Aucune réunion à venir.');
         }
+        // Les réunions clôturées (statut ended, endTime encore futur) ne
+        // doivent plus s'afficher sur l'accueil.
+        final visibleDocs =
+            snap.data!.docs
+                .where(
+                  (doc) =>
+                      (doc.data() as Map<String, dynamic>)['status'] !=
+                      'ended',
+                )
+                .toList();
+        if (visibleDocs.isEmpty) {
+          return _empty('Aucune réunion à venir.');
+        }
         return Column(
           children:
-              snap.data!.docs
+              visibleDocs
                   .map(
                     (doc) => _meetingCard(
                       MeetingModel.fromDoc(
@@ -1013,6 +1026,17 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(width: 10),
+          // Annulation : réservée à l'organisateur, avant le démarrage.
+          if (meeting.organizerId == _uid && !live)
+            IconButton(
+              tooltip: 'Annuler la réunion',
+              onPressed: () => _cancelScheduled(meeting),
+              icon: const Icon(
+                Icons.event_busy_outlined,
+                size: 20,
+                color: AppColors.textSecondary,
+              ),
+            ),
           TextButton(
             style: TextButton.styleFrom(
               foregroundColor:
@@ -1029,6 +1053,57 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+  }
+
+  /// Annule une réunion programmée (organisateur uniquement).
+  Future<void> _cancelScheduled(MeetingModel meeting) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppColors.surface,
+          title: const Text(
+            'Annuler la réunion ?',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: Text(
+            '« ${meeting.title} » sera annulée pour tous les participants.',
+            style: const TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Conserver'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.error,
+              ),
+              child: const Text('Annuler la réunion'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await ScheduleService().cancelScheduled(meeting.id);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('« ${meeting.title} » a été annulée.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Annulation impossible : $e')),
+      );
+    }
   }
 
   Widget _empty(String message) => Container(

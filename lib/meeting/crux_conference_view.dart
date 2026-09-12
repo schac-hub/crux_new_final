@@ -43,12 +43,25 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
   late AnimationController _speakerAnimationController;
   late AnimationController _layoutAnimationController;
   final ScrollController _feedScrollController = ScrollController();
+
+  /// Pagination de la galerie : 6 participants par page, défilement tactile.
+  final PageController _gridPageController = PageController();
+
+  int _gridPage = 0;
+
   final List<ReactionParticle> _reactionParticles = [];
   Timer? _particlePruneTimer;
 
   @override
   void initState() {
     super.initState();
+
+    _gridPageController.addListener(() {
+      final page = _gridPageController.page?.round() ?? 0;
+      if (page != _gridPage && mounted) {
+        setState(() => _gridPage = page);
+      }
+    });
     _speakerAnimationController = AnimationController(
       duration: ConferenceTheme.speakerTransition,
       vsync: this,
@@ -114,6 +127,7 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
     _speakerAnimationController.dispose();
     _layoutAnimationController.dispose();
     _feedScrollController.dispose();
+    _gridPageController.dispose();
     super.dispose();
   }
 
@@ -464,24 +478,114 @@ class _CruxConferenceViewState extends State<CruxConferenceView>
       return _buildWaitingRoom();
     }
 
-    return GridView.builder(
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: layoutMetrics.gridColumns!,
-        childAspectRatio:
-            (layoutMetrics.tileSize?.width ?? 100) /
-            (layoutMetrics.tileSize?.height ?? 100),
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      padding: const EdgeInsets.all(8),
-      itemCount: provider.activeParticipants.length,
-      itemBuilder: (context, index) {
-        final participant = provider.activeParticipants[index];
-        return SpeakerCard(
-          participantState: participant,
-          onTap: () => provider.pinParticipant(participant.participantId),
-        );
-      },
+    // ── 6 participants maximum par page (référence Google Meet) ──────────
+    // Au-delà, on passe à la page suivante : défilement horizontal tactile
+    // (PageView) + points de navigation. Épingler une tuile (toucher) la
+    // met en grand écran pour l'utilisateur local.
+    const participantsPerPage = 6;
+
+    final participants = provider.activeParticipants;
+
+    if (participants.isEmpty) {
+      return _buildWaitingRoom();
+    }
+
+    final pageCount = (participants.length / participantsPerPage).ceil();
+
+    final portrait =
+        MediaQuery.of(context).orientation == Orientation.portrait;
+
+    final crossAxisCount = portrait ? 2 : 3;
+
+    final tileSize = layoutMetrics.tileSize;
+
+    final aspectRatio =
+        tileSize == null || tileSize.width == 0 || tileSize.height == 0
+            ? portrait
+                  ? 0.75
+                  : 1.4
+            : tileSize.width / tileSize.height;
+
+    Widget buildPage(int pageIndex) {
+      final start = pageIndex * participantsPerPage;
+
+      final end = (start + participantsPerPage).clamp(0, participants.length);
+
+      final pageParticipants = participants.sublist(start, end);
+
+      return GridView.builder(
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: crossAxisCount,
+          childAspectRatio: aspectRatio,
+          crossAxisSpacing: 8,
+          mainAxisSpacing: 8,
+        ),
+        padding: const EdgeInsets.all(8),
+        itemCount: pageParticipants.length,
+        itemBuilder: (context, index) {
+          final participant = pageParticipants[index];
+
+          return SpeakerCard(
+            participantState: participant,
+            isPinned:
+                provider.speakerState.isPinned &&
+                provider.speakerState.pinnedParticipantId ==
+                    participant.participantId,
+            onTap: () => provider.pinParticipant(participant.participantId),
+            onLongPress: () => provider.unpinParticipant(),
+          );
+        },
+      );
+    }
+
+    // Une seule page : pas de défilement ni d'indicateur.
+    if (pageCount == 1) {
+      return buildPage(0);
+    }
+
+    return Column(
+      children: [
+        Expanded(
+          child: PageView.builder(
+            itemCount: pageCount,
+            controller: _gridPageController,
+            itemBuilder: (_, pageIndex) => buildPage(pageIndex),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(pageCount, (index) {
+              final active = index == _gridPage;
+
+              return GestureDetector(
+                onTap: () {
+                  if (!_gridPageController.hasClients) return;
+
+                  _gridPageController.animateToPage(
+                    index,
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOut,
+                  );
+                },
+                child: Container(
+                  width: active ? 18 : 7,
+                  height: 7,
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  decoration: BoxDecoration(
+                    color: active
+                        ? AppColors.primary
+                        : Colors.white.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+      ],
     );
   }
 

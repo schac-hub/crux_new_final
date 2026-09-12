@@ -25,6 +25,14 @@ service cloud.firestore {
       );
     }
 
+    function isMeetingModerator(meetingId) {
+      let meeting = get(/databases/$(database)/documents/meetings/$(meetingId));
+      return meeting != null && (
+        meeting.data.organizerId == request.auth.uid
+        || (meeting.data.coHosts != null && meeting.data.coHosts.hasAny([request.auth.uid]))
+      );
+    }
+
     // ── Meetings ──────────────────────────────────────────────────────────
     match /meetings/{meetingId} {
       // Tout utilisateur authentifié peut lire/chercher une réunion (pour la joindre)
@@ -142,6 +150,53 @@ service cloud.firestore {
                         ? request.resource.data.hostId == request.auth.uid
                         : resource.data.hostId == request.auth.uid);
       }
+
+      // Fichiers partagés dans le chat (métadonnées ; binaire dans Storage)
+      match /files/{fileId} {
+        allow read: if isSignedIn() && isMeetingParticipant(meetingId);
+        allow create: if isSignedIn() && isMeetingParticipant(meetingId)
+                      && request.resource.data.senderId == request.auth.uid;
+        allow delete: if isSignedIn() && isMeetingParticipant(meetingId)
+                      && (resource.data.senderId == request.auth.uid
+                          || isMeetingModerator(meetingId));
+      }
+
+      // Participants expulsés par l'hôte : lecture de SA fiche uniquement ;
+      // écriture réservée aux modérateurs. Permet une déconnexion immédiate.
+      match /kicked/{userId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow write: if isSignedIn() && isMeetingModerator(meetingId);
+      }
+
+      // Salle d'attente : chacun déclare SA fiche ; l'hôte/co-hôte admet
+      // (suppression) ou refuse (decision = denied).
+      match /waiting/{userId} {
+        allow read: if isSignedIn() && (
+          request.auth.uid == userId || isMeetingParticipant(meetingId)
+        );
+        allow create: if isSignedIn() && request.auth.uid == userId
+                      && (!('decision' in request.resource.data));
+        allow update, delete: if isSignedIn() && (
+          request.auth.uid == userId || isMeetingModerator(meetingId)
+        );
+      }
+    }
+
+    // ── Sondages & Q&A (temps réel, tous les participants) ────────────────
+    match /polls/{pollId} {
+      allow read: if isSignedIn() && isMeetingParticipant(resource.data.meetingId);
+      allow create: if isSignedIn() && isMeetingParticipant(request.resource.data.meetingId);
+      // Votes (transactions), clôture, suppression : tout participant de la
+      // réunion ; la modération fine reste côté client (UI).
+      allow update, delete: if isSignedIn()
+                            && isMeetingParticipant(resource.data.meetingId);
+    }
+
+    match /qa_questions/{questionId} {
+      allow read: if isSignedIn() && isMeetingParticipant(resource.data.meetingId);
+      allow create: if isSignedIn() && isMeetingParticipant(request.resource.data.meetingId);
+      allow update, delete: if isSignedIn()
+                            && isMeetingParticipant(resource.data.meetingId);
     }
 
     // ── Scheduled Meetings ──────────────────────────────────────────────
@@ -220,6 +275,11 @@ service cloud.firestore {
 
       // DELETE : l'utilisateur peut supprimer SON profil
       allow delete: if isSignedIn() && request.auth.uid == userId;
+
+      // Notes personnelles de réunion (historique « Notes »)
+      match /notes/{noteId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
     }
 
     // ── Meeting reports (top-level) ───────────────────────────────────────

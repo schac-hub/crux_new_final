@@ -16,26 +16,34 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
+import 'package:web/web.dart' as web;
 
 import '../config/app_config.dart';
+import '../meeting/minimized_meeting_overlay.dart';
 import '../models/meeting_report_model.dart';
+import '../models/user_model.dart';
 import '../providers/meeting_state_provider.dart';
 import '../services/file_sharing_service.dart';
 import '../services/input_validator.dart';
 import '../services/keyboard_shortcuts_service.dart';
 import '../services/livekit_service.dart';
 import '../services/meeting_service.dart';
+import '../services/meeting_sounds_service.dart';
 import '../services/noise_reduction_service.dart';
 import '../services/note_service.dart';
+import '../services/payment_service.dart';
 import '../services/polls_service.dart';
 import '../services/pro_service.dart';
+import '../services/participant_photo_cache.dart';
 import '../services/recording_service.dart';
 import '../theme/colors.dart';
 import '../utils/download_file.dart';
+import '../utils/screen_share_support.dart';
 import '../utils/logger.dart';
 import '../meeting/crux_conference_view.dart';
 import '../meeting/entities/speaker_state.dart';
 import '../meeting/reaction_bus.dart';
+import '../screens/home_screen.dart';
 import '../screens/meeting_report_screen.dart';
 import '../screens/pro_screen.dart';
 import '../widgets/network_quality_indicator.dart';
@@ -121,6 +129,11 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
   bool _screenSharing = false;
 
+  /// Sortie audio : haut-parleur (true) ou écouteur combiné (false).
+  /// Uniquement pilotable sur mobile ; le web utilise le périphérique par
+  /// défaut du navigateur.
+  bool _speakerphoneOn = true;
+
   // ===========================================================================
   // UI
   // ===========================================================================
@@ -178,6 +191,27 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
     return identity == _organizerId || _coHosts.contains(identity);
   }
 
+  /// Nom d'affichage d'un participant : métadonnées d'abord (publiées dès la
+  /// connexion), sinon le nom du token, sinon « Participant ». Sans cela le
+  /// panneau affichait l'UID brut ou « Anonymous » à l'entrée.
+  String _participantName(Participant p) {
+    final metadata = p.metadata;
+
+    if (metadata != null && metadata.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(metadata);
+
+        if (decoded is Map<String, dynamic>) {
+          final name = decoded['name']?.toString();
+
+          if (name != null && name.trim().isNotEmpty) return name.trim();
+        }
+      } catch (_) {}
+    }
+
+    return p.name.trim().isNotEmpty ? p.name.trim() : 'Participant';
+  }
+
   // ===========================================================================
   // CHAT NON LU
   // ===========================================================================
@@ -206,11 +240,40 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
   bool _showPolls = false;
 
+  int _unreadPolls = 0;
+
   bool _isMeetingRecording = false;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _recordingSub;
 
   late final TextEditingController _qaCtrl;
+
+  // ===========================================================================
+  // EXPULSION / FIN FORCÉE (déconnexion immédiate, pas seulement un dialogue)
+  // ===========================================================================
+
+  /// Écoute `meetings/{id}/kicked/{uid}` : l'hôte écrit cette fiche au moment
+  /// de l'expulsion → déconnexion LiveKit immédiate + voile plein écran.
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _kickedSub;
+
+  bool _removedByHost = false;
+
+  bool _endedByHost = false;
+
+  // ===========================================================================
+  // SALLE D'ATTENTE (réunions privées : l'hôte admet les participants)
+  // ===========================================================================
+
+  bool _waitingRoomEnabled = false;
+
+  bool _waitingForAdmission = false;
+
+  bool _deniedAdmission = false;
+
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _waitingSub;
+
+  /// Réunion clôturée par l'hôte (statut `ended`) : entrée impossible.
+  bool _meetingEnded = false;
 
   // ===========================================================================
   // CAPTIONS
@@ -227,6 +290,14 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
   int _secondsElapsed = 0;
 
   bool _isPro = false;
+
+  /// Statut Pro temps réel (activation d'un forfait pendant la réunion).
+  StreamSubscription<bool>? _proSub;
+
+  /// Écoute du document réunion : statut « ended » temps réel (hôte ou
+  /// expiration du temps gratuit via MeetingStateProvider).
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+      _meetingStatusSub;
 
   bool _paywallShown = false;
 
@@ -280,14 +351,20 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
     // Sondages & Q&A temps réel (PollsService branché sur cette réunion).
     unawaited(PollsService.instance.initialize(meetingId: widget.meetingId));
 
+    // Sons de notification type Meet (chat, main levée, entrées/sorties).
+    unawaited(MeetingSounds.instance.initialize());
+
     // Préférences audio (réduction de bruit, AEC, AGC) lues à la connexion.
     unawaited(NoiseReductionService.instance.initialize());
 
     // Initialize meeting state provider
     final meetingProvider = context.read<MeetingStateProvider>();
+    final userModel = context.read<UserModel>();
     meetingProvider.initializeMeeting(
       meetingId: widget.meetingId,
       meetingName: widget.meetingName,
+      room: _room,
+      userModel: userModel,
     );
 
     _initialize();
@@ -297,11 +374,22 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
 
+    // La mini-fenêtre ne doit jamais survivre à l'écran de réunion.
+    MinimizedMeetingOverlay.instance.hide();
+
     _callTimer?.cancel();
 
     _latencyTimer?.cancel();
 
     _recordingSub?.cancel();
+
+    _proSub?.cancel();
+
+    _meetingStatusSub?.cancel();
+
+    _kickedSub?.cancel();
+
+    _waitingSub?.cancel();
 
     _presenceSubscription?.cancel();
 
@@ -336,25 +424,33 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
       await _loadOrganizer();
 
-      await _registerPresence();
+      // Réunion clôturée par l'hôte : aucune entrée possible.
+      if (_meetingEnded) {
+        if (!mounted) return;
 
-      await _connect();
+        setState(() {
+          _loading = false;
+          _error = 'Cette réunion a été terminée par l’hôte et n’est plus '
+              'accessible.';
+        });
 
-      _listenPresence();
+        return;
+      }
 
-      _listenChat();
+      // ── Salle d'attente (réunions privées) ──────────────────────────────
+      // Sauf hôte/co-hôte : on attend l'admission de l'hôte AVANT toute
+      // présence ou connexion LiveKit (référence Zoom/Meet).
+      if (_waitingRoomEnabled && !_isModerator) {
+        await _enterWaitingRoom();
 
-      _listenRecordingState();
+        if (!mounted) return;
 
-      _startTimer();
+        if (_deniedAdmission || _waitingForAdmission) {
+          return; // UI dédiée affichée ; la suite partira sur admission.
+        }
+      }
 
-      _startLatencyMonitor();
-
-      if (!mounted) return;
-
-      setState(() {
-        _loading = false;
-      });
+      await _finishJoin();
     } catch (e, stackTrace) {
       logger.e(
         'Large conference initialization failed',
@@ -369,6 +465,212 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         _error = e.toString();
       });
     }
+  }
+
+  /// Connexion effective : présence, LiveKit, listeners, timer.
+  Future<void> _finishJoin() async {
+    await _registerPresence();
+
+    await _connect();
+
+    _listenPresence();
+
+    _listenChat();
+
+    _listenKicked();
+
+    _listenMeetingStatus();
+
+    _listenRecordingState();
+
+    _startTimer();
+
+    _startLatencyMonitor();
+
+    if (!mounted) return;
+
+    setState(() {
+      _loading = false;
+    });
+  }
+
+  // ===========================================================================
+  // SALLE D'ATTENTE
+  // ===========================================================================
+
+  Future<void> _enterWaitingRoom() async {
+    try {
+      await MeetingService().requestAdmission(
+        widget.meetingId,
+        widget.userId,
+        widget.userName,
+      );
+    } catch (e) {
+      logger.w('Waiting room registration failed', error: e);
+      // Sans fiche en attente, impossible d'être admis : on laisse entrer
+      // (comportement dégradé préférable à un blocage total).
+      return;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _loading = false;
+      _waitingForAdmission = true;
+    });
+
+    // L'admission = suppression de SA fiche ; le refus = decision 'denied'.
+    _waitingSub = _db
+        .collection(AppConfig.meetingsCollection)
+        .doc(widget.meetingId)
+        .collection('waiting')
+        .doc(widget.userId)
+        .snapshots()
+        .listen((snap) {
+          if (!mounted || !_waitingForAdmission) return;
+
+          if (!snap.exists) {
+            // Admis : on passe en connexion effective.
+            _waitingSub?.cancel();
+
+            setState(() {
+              _waitingForAdmission = false;
+              _loading = true;
+            });
+
+            unawaited(
+              _finishJoin().catchError((Object e) {
+                logger.w('Join after admission failed', error: e);
+
+                if (mounted) {
+                  setState(() {
+                    _loading = false;
+                    _error = e.toString();
+                  });
+                }
+              }),
+            );
+
+            return;
+          }
+
+          if (snap.data()?['decision'] == 'denied') {
+            _waitingSub?.cancel();
+
+            setState(() {
+              _waitingForAdmission = false;
+              _deniedAdmission = true;
+            });
+          }
+        });
+  }
+
+  Widget _buildWaitingScreen() {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 84,
+                height: 84,
+                decoration: const BoxDecoration(
+                  gradient: AppColors.primaryGradient,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  widget.userName.trim().isEmpty
+                      ? '?'
+                      : widget.userName.trim().characters.first.toUpperCase(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 34,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              if (!_deniedAdmission) ...[
+                const CircularProgressIndicator(
+                  color: AppColors.primary,
+                  strokeWidth: 2,
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'En attente de l’hôte…',
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'L’hôte vous fera entrer dans « ${widget.meetingName} ».',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(color: Colors.white54, fontSize: 13),
+                ),
+                const SizedBox(height: 28),
+                OutlinedButton(
+                  onPressed: () {
+                    // Retrait de la fiche d'attente puis sortie.
+                    _waitingSub?.cancel();
+
+                    _db
+                        .collection(AppConfig.meetingsCollection)
+                        .doc(widget.meetingId)
+                        .collection('waiting')
+                        .doc(widget.userId)
+                        .delete()
+                        .catchError((Object e) {});
+
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('Annuler'),
+                ),
+              ] else ...[
+                const Icon(Icons.block, color: AppColors.error, size: 56),
+                const SizedBox(height: 20),
+                Text(
+                  'Entrée refusée',
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'L’hôte ne vous a pas admis dans cette réunion.',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(color: Colors.white54, fontSize: 13),
+                ),
+                const SizedBox(height: 28),
+                ElevatedButton(
+                  onPressed: () {
+                    // Nettoyage de SA fiche d'attente puis sortie.
+                    _db
+                        .collection(AppConfig.meetingsCollection)
+                        .doc(widget.meetingId)
+                        .collection('waiting')
+                        .doc(widget.userId)
+                        .delete()
+                        .catchError((Object e) {});
+
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('OK'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // ===========================================================================
@@ -409,6 +711,32 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       setState(() {
         _isPro = value;
       });
+
+      // Statut Pro TEMPS RÉEL : si l'utilisateur active son forfait pendant
+      // la réunion (paiement Wave validé), le paywall ne s'affichera pas et
+      // la limite est levée sans quitter la réunion.
+      _proSub = ProService()
+          .proStream(widget.userId)
+          .listen((value) {
+            if (!mounted) return;
+
+            if (_isPro != value) {
+              setState(() => _isPro = value);
+
+              if (value) {
+                _paywallShown = false;
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Forfait actif ✓ — limite de durée levée.',
+                    ),
+                    backgroundColor: AppColors.success,
+                  ),
+                );
+              }
+            }
+          });
     } catch (e) {
       logger.w('Pro check failed', error: e);
     }
@@ -436,6 +764,10 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
       _meetingLocked = data['isLocked'] == true;
 
+      _waitingRoomEnabled = data['waitingRoomEnabled'] == true;
+
+      _meetingEnded = data['status'] == 'ended';
+
       _coHosts = Set<String>.from(List<dynamic>.from(data['coHosts'] ?? []));
     } catch (e) {
       logger.w('Could not load organizer', error: e);
@@ -451,6 +783,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       widget.meetingId,
       widget.userId,
       widget.userName,
+      photoUrl: context.read<UserModel>().profileImageUrl,
     );
 
     if (widget.isHost) {
@@ -528,6 +861,16 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
           }
 
           setState(() {
+            // Son de notification (référence Meet) : seulement pour les
+            // messages des AUTRES, jamais pour les siens.
+            if (_chatInitialSync &&
+                messages.length > _chatMessages.length &&
+                messages.any(
+                  (m) => m.senderId != widget.userId && m.message.isNotEmpty,
+                )) {
+              MeetingSounds.instance.play(MeetingSound.chatMessage);
+            }
+
             _chatMessages
               ..clear()
               ..addAll(messages);
@@ -589,6 +932,17 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       });
     } catch (e) {
       logger.w('Chat send failed', error: e);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Message non envoyé : ${e.toString().replaceFirst('Exception: ', '')}',
+            ),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
     }
   }
 
@@ -596,9 +950,17 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
   // PARTAGE DE FICHIERS DANS LE CHAT (FileSharingService + Firebase Storage)
   // ===========================================================================
 
-  Future<void> _shareChatFile() async {
+  /// Partage d'un fichier (ou d'une photo) dans le chat : upload Firebase
+  /// Storage + métadonnées Firestore + message de chat avec pièce jointe.
+  Future<void> _shareChatFile({bool imageOnly = false}) async {
     try {
-      final result = await FilePicker.platform.pickFiles(withData: true);
+      final result =
+          imageOnly
+              ? await FilePicker.platform.pickFiles(
+                type: FileType.image,
+                withData: true,
+              )
+              : await FilePicker.platform.pickFiles(withData: true);
 
       if (!mounted || result == null || result.files.isEmpty) return;
 
@@ -615,7 +977,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Envoi du fichier…')));
+      ).showSnackBar(const SnackBar(content: Text('Envoi en cours…')));
 
       final data = await FileSharingService.instance.shareFileBytes(
         meetingId: widget.meetingId,
@@ -625,7 +987,10 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         senderName: widget.userName,
       );
 
-      // Message de chat lié au fichier : le rendu affiche une pièce jointe.
+      final isImage = _ChatMessage.isImageName(data['fileName']?.toString());
+
+      // Message de chat lié au fichier : le rendu affiche un aperçu pour les
+      // images, une pièce jointe pour le reste.
       await _db
           .collection(AppConfig.meetingsCollection)
           .doc(widget.meetingId)
@@ -633,8 +998,8 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
           .add({
             'senderId': widget.userId,
             'sender': widget.userName,
-            'message': '📎 ${data['fileName']}',
-            'text': '📎 ${data['fileName']}',
+            'message': '${isImage ? '📷' : '📎'} ${data['fileName']}',
+            'text': '${isImage ? '📷' : '📎'} ${data['fileName']}',
             'fileUrl': data['fileUrl'],
             'fileName': data['fileName'],
             'fileSize': data['fileSize'],
@@ -646,7 +1011,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         'type': 'chat',
         'senderId': widget.userId,
         'sender': widget.userName,
-        'message': '📎 ${data['fileName']}',
+        'message': '${isImage ? '📷' : '📎'} ${data['fileName']}',
       });
     } catch (e) {
       logger.w('File share failed', error: e);
@@ -657,6 +1022,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
             content: Text(
               'Partage impossible : ${e.toString().replaceFirst('Exception: ', '')}',
             ),
+            backgroundColor: AppColors.error,
           ),
         );
       }
@@ -690,9 +1056,13 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
           );
 
       if (connectionDetails == null) {
+        // On remonte la VRAIE cause (quota LiveKit Cloud atteint, HTTP 429/5xx,
+        // réseau…) au lieu d'un message générique : c'est ce qui permet de
+        // comprendre pourquoi un 3ᵉ participant ne peut pas rejoindre.
         throw Exception(
-          'Le serveur LiveKit Sandbox n’a pas retourné '
-          'de détails de connexion valides.',
+          'Connexion au serveur de réunion impossible : '
+          '${LiveKitService.instance.lastError ?? 'erreur inconnue'}. '
+          'Réessayez dans quelques instants.',
         );
       }
 
@@ -745,6 +1115,23 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       final local = room.localParticipant;
 
       if (local != null) {
+        // Nom + photo d'affichage IMMÉDIATS : le token sandbox met l'UID
+        // Firebase comme nom (identity), donc les tuiles affichaient
+        // « Anonymous » (ou l'UID brut) jusqu'au premier événement
+        // metadata. La photo suit le même canal.
+        if (mounted) {
+          final profilePhoto = context.read<UserModel>().profileImageUrl;
+
+          local.setMetadata(
+            jsonEncode({
+              'name': widget.userName,
+              if (profilePhoto != null && profilePhoto.isNotEmpty)
+                'photo': profilePhoto,
+              'hand_raised': _handRaised,
+            }),
+          );
+        }
+
         await local.setMicrophoneEnabled(_micOn);
 
         await local.setCameraEnabled(_camOn);
@@ -832,6 +1219,10 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         // Update meeting state provider
         meetingProvider.updateParticipant(event.participant);
 
+        // Son d'entrée (type Meet) : le compteur se rafraîchit via
+        // _refreshParticipants et le pill du top bar.
+        MeetingSounds.instance.play(MeetingSound.participantJoin);
+
         if (_voiceAssistant) {
           final name =
               event.participant.name.trim().isNotEmpty
@@ -846,6 +1237,8 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
         // Update meeting state provider
         meetingProvider.removeParticipant(event.participant.sid);
+
+        MeetingSounds.instance.play(MeetingSound.participantLeave);
 
         if (_voiceAssistant) {
           final name =
@@ -875,6 +1268,13 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       ..on<TrackSubscribedEvent>((event) {
         _refreshParticipants();
         meetingProvider.updateParticipant(event.participant);
+
+        // Nouvelle piste audio : ré-applique l'état du haut-parleur
+        // (mute/volume) — sinon un participant qui arrive après la coupure
+        // du son restait audible.
+        if (event.track is RemoteAudioTrack) {
+          _applyWebSpeakerVolume(_speakerphoneOn);
+        }
       })
       ..on<TrackUnsubscribedEvent>((event) {
         _refreshParticipants();
@@ -887,6 +1287,18 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       ..on<TrackUnpublishedEvent>((event) {
         _refreshParticipants();
         meetingProvider.updateParticipant(event.participant);
+      })
+      ..on<LocalTrackUnpublishedEvent>((event) {
+        // Bouton « Arrêter le partage » du navigateur (barre Chrome) ou
+        // MediaProjection arrêté côté système : on resynchronise l'état du
+        // bouton, sinon il restait « partage actif » à tort.
+        if (event.publication.source == TrackSource.screenShareVideo) {
+          if (mounted) {
+            setState(() => _screenSharing = false);
+          }
+
+          meetingProvider.setScreenSharing(false);
+        }
       })
       ..on<DataReceivedEvent>(_handleDataReceived);
   }
@@ -978,7 +1390,13 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         final sender = event.participant?.identity;
 
         if (target == widget.userId && _isModeratorIdentity(sender)) {
-          _showRemovedByHostDialog();
+          // Déconnexion immédiate : plus d'audio/vidéo tant que le voile
+          // n'a pas été validé par « OK ».
+          _onForceExit(
+            removedByHost: true,
+            title: 'Retiré de la réunion',
+            message: 'L’hôte vous a retiré de cette réunion.',
+          );
         }
 
         return;
@@ -988,7 +1406,47 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         final sender = event.participant?.identity;
 
         if (_isModeratorIdentity(sender) && !_isModerator) {
-          _showEndedByHostDialog();
+          _onForceExit(
+            removedByHost: false,
+            title: 'Réunion terminée',
+            message: 'L’hôte a terminé la réunion pour tous les participants.',
+          );
+        }
+
+        return;
+      }
+
+      if (type == 'poll_started') {
+        // Un sondage vient d'être lancé : il devient visible de TOUS
+        // immédiatement (le panneau s'ouvre automatiquement).
+        if (mounted) {
+          setState(() {
+            _showPolls = true;
+            _unreadPolls = 0;
+          });
+
+          MeetingSounds.instance.play(MeetingSound.pollStarted);
+
+          _announce('Un nouveau sondage a été lancé.');
+        }
+
+        return;
+      }
+
+      if (type == 'question_asked') {
+        if (mounted && !_showPolls) {
+          setState(() => _unreadPolls++);
+
+          MeetingSounds.instance.play(MeetingSound.chatMessage);
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '❓ Nouvelle question de ${decoded['sender'] ?? 'un participant'} '
+                '(menu Plus → Sondages & Q&A)',
+              ),
+            ),
+          );
         }
 
         return;
@@ -1056,6 +1514,11 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
         if (identity == null) {
           return;
+        }
+
+        // Son « main levée » pour attirer l'attention (comme Meet/Zoom).
+        if (identity != widget.userId) {
+          MeetingSounds.instance.play(MeetingSound.handRaise);
         }
 
         if (mounted) {
@@ -1234,15 +1697,36 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
       if (local == null) return;
 
-      await local.setCameraEnabled(
-        true,
-        cameraCaptureOptions: CameraCaptureOptions(
-          cameraPosition: next,
-          params: _videoParamsForQuality(_videoQuality),
-        ),
+      final captureOptions = CameraCaptureOptions(
+        cameraPosition: next,
+        params: _videoParamsForQuality(_videoQuality),
       );
+
+      if (kIsWeb) {
+        // Web (Chrome/Safari iOS inclus) : `facingMode` n'est re-lu qu'à
+        // la (re)création de la piste. On éteint puis on relance la caméra
+        // pour obtenir un vrai switch avant ↔ arrière.
+        await local.setCameraEnabled(false);
+        await local.setCameraEnabled(true, cameraCaptureOptions: captureOptions);
+      } else {
+        await local.setCameraEnabled(
+          true,
+          cameraCaptureOptions: captureOptions,
+        );
+      }
     } catch (e) {
       logger.w('Camera switch failed', error: e);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Impossible de changer de caméra. '
+              'Autorisez l\'accès à la caméra ou reprenez la vidéo.',
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -1272,11 +1756,121 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
             borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
           ),
           child: SafeArea(
-            // Le widget ferme lui-même la feuille après sélection.
-            child: ReactionEmojis(onReactionSelected: _sendReactionString),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Main levée : comme sur Zoom, elle vit dans le menu réactions.
+                ListTile(
+                  leading: Icon(
+                    Icons.back_hand,
+                    color: _handRaised ? Colors.orange : Colors.white70,
+                  ),
+                  title: Text(
+                    _handRaised ? 'Baisser la main' : 'Lever la main',
+                    style: TextStyle(
+                      color: _handRaised ? Colors.orange : Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+
+                    _toggleRaiseHand();
+                  },
+                ),
+                const Divider(color: Colors.white10, height: 20),
+                // Le widget ferme lui-même la feuille après sélection.
+                ReactionEmojis(onReactionSelected: _sendReactionString),
+              ],
+            ),
           ),
         );
       },
+    );
+  }
+
+  // ===========================================================================
+  // HAUT-PARLEUR (sortie audio)
+  // ===========================================================================
+
+  /// Applique le volume de sortie sur web : LiveKit crée un élément
+  /// <audio> par piste distante dans le conteneur `livekit_audio_container`
+  /// — on pilote directement leur volume/mute. Ré-appliqué à chaque
+  /// nouvelle piste audio souscrite (voir TrackSubscribedEvent).
+  void _applyWebSpeakerVolume(bool speakerOn) {
+    if (!kIsWeb) return;
+
+    try {
+      final container = web.document.getElementById('livekit_audio_container');
+
+      if (container == null) return;
+
+      final audios = container.querySelectorAll('audio');
+
+      for (var i = 0; i < audios.length; i++) {
+        final audio = audios.item(i) as web.HTMLAudioElement?;
+
+        if (audio == null) continue;
+
+        audio.muted = !speakerOn;
+        audio.volume = speakerOn ? 1.0 : 0.0;
+      }
+    } catch (e) {
+      logger.w('Web speaker volume failed', error: e);
+    }
+  }
+
+  Future<void> _toggleSpeakerphone() async {
+    final next = !_speakerphoneOn;
+
+    if (kIsWeb) {
+      // Web (Chrome/Safari/Firefox, iOS inclus) : coupe ou rétablit la
+      // sortie des pistes audio distantes.
+      _applyWebSpeakerVolume(next);
+
+      if (!mounted) return;
+
+      setState(() => _speakerphoneOn = next);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            next ? 'Haut-parleur activé.' : 'Son coupé (haut-parleur muet).',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    try {
+      // API actuelle de livekit_client (setSpeakerphoneOn est dépréciée).
+      await AudioManager.instance.setSpeakerOutputPreferred(next);
+    } catch (e) {
+      logger.w('Speakerphone toggle failed', error: e);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sortie audio non disponible sur cet appareil.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+
+    setState(() => _speakerphoneOn = next);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          next
+              ? 'Haut-parleur activé.'
+              : 'Son sur l\'écouteur combiné.',
+        ),
+      ),
     );
   }
 
@@ -1351,6 +1945,8 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
   /// Écoute le document réunion : indicateur REC, verrou et cohôtes restent
   /// synchronisés en temps réel pour tous les participants (web + mobile).
+  /// Détecte aussi la fin de réunion décidée par l'hôte : tout le monde est
+  /// alors déconnecté, même si le message data channel a été manqué.
   void _listenRecordingState() {
     _recordingSub = _db
         .collection(AppConfig.meetingsCollection)
@@ -1360,6 +1956,18 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
           if (!mounted) return;
 
           final data = snap.data();
+
+          // Réunion clôturée par l'hôte : sortie forcée pour tous sauf les
+          // modérateurs (l'hôte voit son rapport de fin).
+          if (data?['status'] == 'ended' && !_isModerator) {
+            _onForceExit(
+              removedByHost: false,
+              title: 'Réunion terminée',
+              message: 'L’hôte a terminé la réunion pour tous les participants.',
+            );
+
+            return;
+          }
 
           final isRecording = data?['isRecording'] == true;
 
@@ -1518,7 +2126,20 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
     if (confirmed != true) return;
 
+    // 1. Message data channel (déconnexion immédiate chez la cible).
     await _sendData({'type': 'kick', 'target': identity});
+
+    // 2. Fiche persistée dans Firestore : la cible est déconnectée même si le
+    // paquet data a été perdu, et ne peut plus rejoindre cette réunion.
+    try {
+      await MeetingService().kickParticipant(
+        widget.meetingId,
+        identity,
+        kickedBy: widget.userId,
+      );
+    } catch (e) {
+      logger.w('Kick persistence failed', error: e);
+    }
   }
 
   Future<void> _toggleLockMeeting() async {
@@ -1542,6 +2163,38 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       );
     } catch (e) {
       logger.w('Lock meeting failed', error: e);
+    }
+  }
+
+  /// Salle d'attente : l'hôte admet manuellement chaque nouveau participant
+  /// (référence Zoom). Les modérateurs entrent toujours directement.
+  Future<void> _toggleWaitingRoom() async {
+    final next = !_waitingRoomEnabled;
+
+    try {
+      await MeetingService().setWaitingRoom(widget.meetingId, next);
+
+      if (!mounted) return;
+
+      setState(() => _waitingRoomEnabled = next);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            next
+                ? 'Salle d\'attente activée : l\'hôte admettra les participants.'
+                : 'Salle d\'attente désactivée.',
+          ),
+        ),
+      );
+    } catch (e) {
+      logger.w('Waiting room toggle failed', error: e);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Salle d\'attente indisponible.')),
+        );
+      }
     }
   }
 
@@ -1622,68 +2275,120 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
     );
   }
 
-  void _showRemovedByHostDialog() {
-    if (!mounted) return;
+  /// Expulsion ou fin forcée : on coupe IMMÉDIATEMENT LiveKit (plus d'audio,
+  /// plus de data, plus de participation) et on affiche un voile plein écran.
+  /// L'ancien comportement (simple dialogue sur données appuyer « OK »)
+  /// laissait le participant discuter et entendre la réunion.
+  void _onForceExit({
+    required bool removedByHost,
+    required String title,
+    required String message,
+  }) {
+    if (!mounted || _removedByHost || _endedByHost) return;
 
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: const Text(
-            'Retiré de la réunion',
-            style: TextStyle(color: Colors.white),
-          ),
-          content: const Text(
-            'L’hôte vous a retiré de cette réunion.',
-            style: TextStyle(color: Colors.white70),
-          ),
-          actions: [
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
+    setState(() {
+      _removedByHost = removedByHost;
+      _endedByHost = !removedByHost;
+    });
 
-                _leave();
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
+    unawaited(_disposeRoom());
+
+    _announce(message);
+  }
+
+  Widget _buildForceExitOverlay() {
+    final removed = _removedByHost;
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                removed ? Icons.person_remove : Icons.meeting_room,
+                color: removed ? AppColors.error : Colors.orange,
+                size: 64,
+              ),
+              const SizedBox(height: 24),
+              Text(
+                removed ? 'Retiré de la réunion' : 'Réunion terminée',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                removed
+                    ? 'L’hôte vous a retiré de cette réunion. '
+                        'Vous ne pouvez plus y accéder.'
+                    : 'L’hôte a terminé la réunion pour tous les participants. '
+                        'Elle n’est plus accessible.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(color: Colors.white54, fontSize: 13),
+              ),
+              const SizedBox(height: 32),
+              ElevatedButton(
+                onPressed: _leave,
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
-  void _showEndedByHostDialog() {
-    if (!mounted) return;
+  /// Écoute la fiche d'expulsion écrite par l'hôte dans Firestore. Complète le
+  /// message data channel : ça marche même si un paquet data a été perdu et
+  /// bloque aussi la ré-entrée (la fiche persiste).
+  void _listenKicked() {
+    if (widget.userId.isEmpty) return;
 
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: const Text(
-            'Réunion terminée',
-            style: TextStyle(color: Colors.white),
-          ),
-          content: const Text(
-            'L’hôte a terminé la réunion pour tous les participants.',
-            style: TextStyle(color: Colors.white70),
-          ),
-          actions: [
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
+    _kickedSub = _db
+        .collection(AppConfig.meetingsCollection)
+        .doc(widget.meetingId)
+        .collection('kicked')
+        .doc(widget.userId)
+        .snapshots()
+        .listen((snap) {
+          if (!mounted || !snap.exists) return;
 
-                _leave();
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
-    );
+          _onForceExit(
+            removedByHost: true,
+            title: 'Retiré de la réunion',
+            message: 'L’hôte vous a retiré de cette réunion.',
+          );
+        });
+  }
+
+  /// Écoute le statut de la réunion en temps réel : quand le document passe
+  /// à `status: 'ended'` (hôte, ou expiration du temps gratuit déclenchée
+  /// par [MeetingStateProvider]), tout le monde est déconnecté et voit le
+  /// voile « Réunion terminée ».
+  void _listenMeetingStatus() {
+    _meetingStatusSub = _db
+        .collection(AppConfig.meetingsCollection)
+        .doc(widget.meetingId)
+        .snapshots()
+        .listen((snap) {
+          if (!mounted || !snap.exists) return;
+
+          final status = snap.data()?['status']?.toString();
+
+          if (status == 'ended') {
+            _onForceExit(
+              removedByHost: false,
+              title: 'Réunion terminée',
+              message: 'La réunion est terminée.',
+            );
+          }
+        });
   }
 
   // ===========================================================================
@@ -1733,7 +2438,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(
-                    p.name.isNotEmpty ? p.name : 'Participant',
+                    _participantName(p),
                     style: const TextStyle(
                       color: Colors.white70,
                       fontWeight: FontWeight.w700,
@@ -1846,16 +2551,37 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Padding(
-                        padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
-                        child: Text(
-                          'Paramètres de la réunion',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 17,
+                      // Bouton retour : referme les paramètres et reprend
+                      // directement le chat (demande utilisateur).
+                      Row(
+                        children: [
+                          IconButton(
+                            tooltip: 'Retour au chat',
+                            onPressed: () {
+                              Navigator.pop(sheetContext);
+
+                              setState(() {
+                                _showChat = true;
+                                _unreadChat = 0;
+                                _lastSeenChatCount = _chatMessages.length;
+                              });
+                            },
+                            icon: const Icon(
+                              Icons.arrow_back,
+                              color: Colors.white,
+                            ),
                           ),
-                        ),
+                          const Expanded(
+                            child: Text(
+                              'Paramètres de la réunion',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 17,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       const Padding(
                         padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
@@ -2109,8 +2835,38 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
       // 1. Vérifier qu'on est sur une plateforme qui supporte screen share
       if (kIsWeb) {
-        // Web : getDisplayMedia — OK via setScreenShareEnabled
-        await local.setScreenShareEnabled(true);
+        try {
+          // Web : getDisplayMedia — OK via setScreenShareEnabled
+          await local.setScreenShareEnabled(true);
+        } catch (e) {
+          final message = e.toString().toLowerCase();
+
+          logger.w('Screen share web start failed', error: e);
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                backgroundColor: AppColors.error,
+                content: Text(
+                  message.contains('permission') ||
+                          message.contains('notallowed') ||
+                          message.contains('denied')
+                      ? 'Partage refusé : autorisez le partage d\'écran '
+                          'dans la fenêtre du navigateur (choisissez un '
+                          'onglet ou un écran).'
+                      : message.contains('secure') ||
+                          message.contains('display')
+                      ? 'Le partage d\'écran nécessite une fenêtre '
+                          'sécurisée (HTTPS) et un navigateur compatible '
+                          '(Chrome, Edge, Firefox).'
+                      : 'Partage d\'écran impossible : $e',
+                ),
+              ),
+            );
+          }
+
+          return;
+        }
       } else {
         // Android/iOS : vérifier la permission FOREGROUND_SERVICE (Android 14+)
         // On laisse setScreenShareEnabled gérer le MediaProjection manager natif
@@ -2194,15 +2950,23 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       });
 
       // Métadonnées participant : les tuiles vidéo (SpeakerCard) lisent
-      // `hand_raised` pour afficher le badge « Main levée ».
+      // `hand_raised` pour afficher le badge « Main levée ». On préserve
+      // la photo : setMetadata remplace tout l'objet.
       final local = _room?.localParticipant;
 
-      if (local != null) {
+      if (local != null && mounted) {
+        final profilePhoto = context.read<UserModel>().profileImageUrl;
+
         // setMetadata renvoie void (livekit_client <= 2.6.x) ou Future<void>
         // (>= 2.7) selon la version résolue : pas de await, compatible avec
         // les deux signatures.
         local.setMetadata(
-          jsonEncode({'hand_raised': next, 'name': widget.userName}),
+          jsonEncode({
+            'hand_raised': next,
+            'name': widget.userName,
+            if (profilePhoto != null && profilePhoto.isNotEmpty)
+              'photo': profilePhoto,
+          }),
         );
       }
 
@@ -2213,6 +2977,8 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       });
 
       if (next) {
+        MeetingSounds.instance.play(MeetingSound.handRaise);
+
         _announce('Vous avez levé la main.');
       }
     } catch (e) {
@@ -2368,14 +3134,29 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         _secondsElapsed++;
       });
 
+      // Battement de cœur (hôte) : maintient `endTime` dans le futur pour
+      // que la réunion reste visible sur l'écran d'accueil tant qu'elle vit.
+      if (widget.isHost && _secondsElapsed > 0 && _secondsElapsed % 600 == 0) {
+        unawaited(
+          MeetingService().pushMeetingEndTime(
+            widget.meetingId,
+            ahead: const Duration(minutes: 20),
+          ),
+        );
+      }
+
       if (_isPro) return;
 
       final limit = AppConfig.freeMeetingDurationMinutes * 60;
 
-      if (_secondsElapsed == limit - 300) {
-        _announce(
-          'Attention, votre appel gratuit se terminera dans 5 minutes.',
-        );
+      // Avertissements hôte : 10 minutes puis 5 minutes avant l'échéance,
+      // avec son d'alerte dédié (l'hôte doit percevoir même sans écran).
+      if (widget.isHost && _secondsElapsed == limit - 600) {
+        _playFreeTierWarning(10);
+      }
+
+      if (widget.isHost && _secondsElapsed == limit - 300) {
+        _playFreeTierWarning(5);
       }
 
       if (_secondsElapsed >= limit && !_paywallShown) {
@@ -2384,6 +3165,31 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         _showPaywall();
       }
     });
+  }
+
+  /// Alerte « limite gratuite bientôt atteinte » (hôte uniquement) :
+  /// son dédié + annonce vocale + bandeau.
+  void _playFreeTierWarning(int minutesLeft) {
+    MeetingSounds.instance.play(MeetingSound.limitWarning);
+
+    _announce(
+      'Attention, votre réunion gratuite se terminera dans '
+      '$minutesLeft minutes.',
+    );
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '⏳ Limite gratuite bientôt atteinte — '
+          '$minutesLeft minutes restantes. Prolongez pour 3 000 F ou '
+          'passez au forfait Pro.',
+        ),
+        backgroundColor: Colors.orange,
+        duration: const Duration(seconds: 6),
+      ),
+    );
   }
 
   String _formatElapsedDuration() {
@@ -2414,42 +3220,125 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       context: context,
       barrierDismissible: false,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: const Text(
-            'Temps écoulé',
-            style: TextStyle(color: Colors.white),
-          ),
-          content: const Text(
-            'La limite de la réunion gratuite est atteinte.',
-            style: TextStyle(color: Colors.white70),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-
-                _leave();
-              },
-              child: const Text('Quitter'),
+        return PopScope(
+          canPop: false,
+          child: AlertDialog(
+            backgroundColor: AppColors.surface,
+            title: const Text(
+              'Temps écoulé',
+              style: TextStyle(color: Colors.white),
             ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-
-                // Page d'abonnement (anciennement appel direct à
-                // startPayment : l'utilisateur voit désormais l'offre).
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ProScreen()),
-                );
-              },
-              child: const Text('Devenir Pro'),
+            content: const Text(
+              'La limite de la réunion gratuite (1 h 45) est atteinte. '
+              'Prolongez la réunion ou passez à un forfait pour continuer.',
+              style: TextStyle(color: Colors.white70),
             ),
-          ],
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+
+                  _leave();
+                },
+                child: const Text('Quitter'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+
+                  _continueMeetingWithWave();
+                },
+                child: const Text(
+                  'Continuer — 3 000 F',
+                  style: TextStyle(color: Colors.orangeAccent),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+
+                  // Page d'abonnement : offres Pro (25 000 F) et
+                  // Max (85 000 F), paiement Wave + vérification auto.
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ProScreen()),
+                  );
+                },
+                child: const Text('Devenir Pro'),
+              ),
+            ],
+          ),
         );
       },
     );
+  }
+
+  /// Prolongation de la réunion en cours pour 3 000 F (Wave).
+  ///
+  /// Ouvre le lien Wave, lance la vérification automatique en boucle et,
+  /// dès confirmation serveur : la limite locale est levée (l'appel
+  /// continue) et `endTime` est repoussé dans Firestore.
+  Future<void> _continueMeetingWithWave() async {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Paiement Wave 3 000 F — vérification automatique en cours…',
+        ),
+        backgroundColor: Colors.blueGrey,
+      ),
+    );
+
+    final verified = await PaymentService().pollVerification(
+      WaveProduct.meetingContinue,
+      attempts: 20,
+      meetingId: widget.meetingId,
+    );
+
+    if (!mounted) return;
+
+    if (verified) {
+      setState(() {
+        // Lève la limite locale : le timer cesse d'afficher le paywall.
+        _isPro = true;
+        _paywallShown = false;
+      });
+
+      // Cohérence Firestore (endTime repoussé côté serveur déjà, on
+      // s'assure que la réunion reste visible immédiatement).
+      await MeetingService().pushMeetingEndTime(
+        widget.meetingId,
+        ahead: const Duration(hours: 3),
+      );
+
+      MeetingSounds.instance.play(MeetingSound.pollStarted);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '✅ Paiement confirmé — la réunion continue !',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Paiement non détecté — termine le paiement Wave puis '
+              'relance la prolongation.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+
+        _showPaywall();
+      }
+    }
   }
 
   // ===========================================================================
@@ -2565,6 +3454,14 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (_removedByHost || _endedByHost) {
+      return _buildForceExitOverlay();
+    }
+
+    if (_waitingForAdmission || _deniedAdmission) {
+      return _buildWaitingScreen();
+    }
+
     if (_error != null) {
       return _buildError();
     }
@@ -2574,40 +3471,118 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
     }
 
     // Raccourcis clavier Zoom (Alt+A micro, Alt+V caméra, Alt+S partage…).
+    //
+    // Le bouton système « retour » RÉDUIT la réunion en mini-fenêtre flottante
+    // (la réunion reste active en arrière-plan) au lieu de la quitter.
     return _shortcuts.buildKeyboardShortcutHandler(
-      child: Scaffold(
-        backgroundColor: AppColors.background,
-        body: Stack(
-          children: [
-            // Conference view (layouts vidéo + overlays). Les barres de
-            // contrôles propres à cette vue sont désactivées ici : c'est cet
-            // écran qui pilote réellement LiveKit.
-            Positioned.fill(
-              child: CruxConferenceView(
-                showOverlayControls: false,
-                showNetworkStats: _showNetworkStats,
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop) _minimizeMeeting();
+        },
+        child: Scaffold(
+          backgroundColor: AppColors.background,
+          body: Stack(
+            children: [
+              // Conference view (layouts vidéo + overlays). Les barres de
+              // contrôles propres à cette vue sont désactivées ici : c'est cet
+              // écran qui pilote réellement LiveKit.
+              Positioned.fill(
+                child: CruxConferenceView(
+                  showOverlayControls: false,
+                  showNetworkStats: _showNetworkStats,
+                ),
               ),
-            ),
 
-          _buildTopBar(),
+              _buildTopBar(),
 
-          if (_currentTranscription.isNotEmpty) _buildCaptions(),
+              if (_currentTranscription.isNotEmpty) _buildCaptions(),
 
-          _buildBottomBar(),
+              _buildBottomBar(),
 
-          if (_showChat) _buildChatPanel(),
+              if (_showChat) _buildChatPanel(),
 
-          if (_showParticipants) _buildParticipantsPanel(),
+              if (_showParticipants) _buildParticipantsPanel(),
 
-          if (_showNotes) _buildNotesPanel(),
+              if (_showNotes) _buildNotesPanel(),
 
-          if (_showPolls) _buildPollsPanel(),
+              if (_showPolls) _buildPollsPanel(),
 
-          if (_isReconnecting) _buildReconnectBanner(),
-          ],
+              if (_isReconnecting) _buildReconnectBanner(),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  // ===========================================================================
+  // RÉDUCTION (mini-fenêtre flottante, réunion active en arrière-plan)
+  // ===========================================================================
+
+  void _minimizeMeeting() {
+    final navigator = Navigator.of(context);
+
+    MinimizedMeetingOverlay.instance.show(
+      context: context,
+      meetingName: widget.meetingName,
+      participantCount: () => _participantCount,
+      elapsedSeconds: () => _secondsElapsed,
+      videoTrack: _pickMiniVideoTrack,
+      onExpand: () {
+        // Revenir : on referme l'écran d'accueil poussé par-dessus.
+        navigator.pop();
+      },
+      onEnd: () {
+        navigator.pop();
+
+        unawaited(_leave());
+      },
+    );
+
+    // L'écran de réunion reste monté SOUS l'accueil (route poussée) : LiveKit
+    // et les listeners continuent de tourner en arrière-plan.
+    navigator.push(
+      MaterialPageRoute(
+        builder: (_) => HomeScreen(
+          user: UserModel(
+            uid: widget.userId,
+            email: widget.userEmail ?? '',
+            name: widget.userName,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Meilleur flux vidéo pour la mini-fenêtre : partage d'écran d'abord, sinon
+  /// la première caméra active (locale ou distante).
+  VideoTrack? _pickMiniVideoTrack() {
+    final room = _room;
+
+    if (room == null) return null;
+
+    final participants = <Participant?>[
+      room.localParticipant,
+      ...room.remoteParticipants.values,
+    ];
+
+    for (final source in [
+      TrackSource.screenShareVideo,
+      TrackSource.camera,
+    ]) {
+      for (final p in participants) {
+        if (p == null) continue;
+
+        final pub = p.getTrackPublicationBySource(source);
+
+        final track = pub?.track;
+
+        if (track is VideoTrack) return track;
+      }
+    }
+
+    return null;
   }
 
   // ===========================================================================
@@ -2786,6 +3761,14 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
               ),
               const SizedBox(width: 8),
               IconButton(
+                tooltip: 'Réduire (réunion en arrière-plan)',
+                onPressed: _minimizeMeeting,
+                icon: const Icon(
+                  Icons.picture_in_picture_alt,
+                  color: Colors.white,
+                ),
+              ),
+              IconButton(
                 tooltip: 'Quitter',
                 onPressed: _confirmLeave,
                 icon: const Icon(Icons.close, color: Colors.white),
@@ -2866,6 +3849,8 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
+                // ── Essentiels (référence Zoom) : micro, caméra, partage,
+                //    chat, participants, réactions, plus.
                 _ControlButton(
                   icon: _micOn ? Icons.mic : Icons.mic_off,
                   active: _micOn,
@@ -2878,18 +3863,15 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                   onTap: _toggleCamera,
                   onLongPress: _showMeetingSettings,
                 ),
-                _ControlButton(
-                  icon: Icons.poll_outlined,
-                  onTap: () {
-                    setState(() {
-                      _showPolls = true;
-                    });
-                  },
-                ),
-                _ControlButton(
-                  icon: Icons.sentiment_satisfied_alt_outlined,
-                  onTap: _showReactionsPicker,
-                ),
+                // Partage d'écran : web UNIQUEMENT, et seulement si le
+                // navigateur expose getDisplayMedia (Safari iOS ne l'a pas →
+                // bouton masqué) ; sur mobile MediaProjection crashe l'app.
+                if (kIsWeb && isScreenShareSupported)
+                  _ControlButton(
+                    icon: Icons.screen_share_outlined,
+                    active: _screenSharing,
+                    onTap: _toggleScreenShare,
+                  ),
                 _ControlButton(
                   icon: Icons.chat_bubble_outline,
                   badge: _unreadChat,
@@ -2909,33 +3891,17 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                     });
                   },
                 ),
-                // Partage d'écran : réservé au web (getDisplayMedia). Sur
-                // mobile, MediaProjection fait planter l'app.
-                if (kIsWeb)
-                  _ControlButton(
-                    icon: Icons.screen_share_outlined,
-                    active: _screenSharing,
-                    onTap: _toggleScreenShare,
-                  ),
                 _ControlButton(
-                  icon: Icons.back_hand_outlined,
-                  active: _handRaised,
-                  onTap: _toggleRaiseHand,
+                  icon: Icons.sentiment_satisfied_alt_outlined,
+                  onTap: _showReactionsPicker,
                 ),
+                // ── Tout le reste (sondages, notes, sous-titres, main
+                //    levée, paramètres…) vit dans le menu « Plus ».
                 _ControlButton(
-                  icon: Icons.closed_caption_outlined,
-                  active: _liveCaptions,
-                  onTap: _toggleCaptions,
+                  icon: Icons.more_horiz,
+                  badge: _unreadPolls,
+                  onTap: _showMoreOptions,
                 ),
-                _ControlButton(
-                  icon: Icons.note_alt_outlined,
-                  onTap: () {
-                    setState(() {
-                      _showNotes = true;
-                    });
-                  },
-                ),
-                _ControlButton(icon: Icons.more_horiz, onTap: _showMoreOptions),
               ],
             ),
           ),
@@ -3000,6 +3966,11 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                     ),
                     onSubmitted: (_) => _sendChat(),
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Envoyer une photo',
+                  onPressed: () => _shareChatFile(imageOnly: true),
+                  icon: const Icon(Icons.image_outlined, color: Colors.white60),
                 ),
                 IconButton(
                   tooltip: 'Partager un fichier',
@@ -3085,14 +4056,23 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                 ],
               ),
             ),
+          // Salle d'attente (modérateurs) : admettre / refuser, référence Zoom.
+          if (_isModerator) _buildWaitingRoomSection(),
           Expanded(
             child:
                 participants.isEmpty
-                    ? const Center(
-                      child: Text(
-                        'Aucun participant distant',
-                        style: TextStyle(color: Colors.white38),
-                      ),
+                    ? ListView(
+                      children: const [
+                        SizedBox(height: 40),
+                        Center(
+                          child: Text(
+                            'Vous êtes seul pour le moment.\n'
+                            'Partagez le code ou le lien pour inviter.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white38),
+                          ),
+                        ),
+                      ],
                     )
                     : ListView.builder(
                       itemCount: participants.length,
@@ -3110,9 +4090,12 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                               _isModerator
                                   ? () => _showParticipantActions(p)
                                   : null,
-                          leading: _Avatar(name: p.name),
+                          leading: _Avatar(
+                            name: _participantName(p),
+                            uid: p.identity,
+                          ),
                           title: Text(
-                            p.name.isNotEmpty ? p.name : 'Participant',
+                            _participantName(p),
                             style: const TextStyle(color: Colors.white),
                           ),
                           subtitle: Text(
@@ -3161,8 +4144,137 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                       },
                     ),
           ),
+          // Moi-même : toujours visible, tout en bas de la liste.
+          ListTile(
+            leading: _Avatar(name: widget.userName, uid: widget.userId),
+            title: Text(
+              '${widget.userName} (Vous)',
+              style: const TextStyle(color: Colors.white),
+            ),
+            subtitle: Text(
+              _isModerator ? 'Modérateur' : 'Participant',
+              style: const TextStyle(color: AppColors.primary, fontSize: 10),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!_micOn)
+                  const Icon(Icons.mic_off, color: Colors.white38, size: 18),
+                if (!_camOn)
+                  const Icon(
+                    Icons.videocam_off,
+                    color: Colors.white38,
+                    size: 18,
+                  ),
+                if (_handRaised)
+                  const Icon(Icons.back_hand, color: Colors.orange, size: 18),
+              ],
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  // ===========================================================================
+  // SALLE D'ATTENTE — vue hôte (admettre / refuser)
+  // ===========================================================================
+
+  Widget _buildWaitingRoomSection() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: MeetingService().streamWaiting(widget.meetingId),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+
+        if (docs.isEmpty) return const SizedBox.shrink();
+
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.orange.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.orange.withValues(alpha: 0.35)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.hourglass_top,
+                    color: Colors.orange,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Salle d\'attente (${docs.length})',
+                    style: const TextStyle(
+                      color: Colors.orange,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+              ...docs.map((doc) {
+                final name = doc.data()['name']?.toString() ?? 'Participant';
+
+                return ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: _Avatar(name: name, uid: doc.id),
+                  title: Text(
+                    name,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                  subtitle: const Text(
+                    'Demande d\'accès',
+                    style: TextStyle(color: Colors.white38, fontSize: 10),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ElevatedButton(
+                        onPressed: () => MeetingService().admitParticipant(
+                          widget.meetingId,
+                          doc.id,
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.success,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          minimumSize: const Size(0, 32),
+                        ),
+                        child: const Text(
+                          'Admettre',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      OutlinedButton(
+                        onPressed: () => MeetingService().denyParticipant(
+                          widget.meetingId,
+                          doc.id,
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.error,
+                          side: const BorderSide(color: AppColors.error),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          minimumSize: const Size(0, 32),
+                        ),
+                        child: const Text(
+                          'Refuser',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -3652,27 +4764,12 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
                     Navigator.pop(dialogContext);
 
-                    PollsService.instance
-                        .createPoll(
-                          meetingId: widget.meetingId,
-                          question: question,
-                          options:
-                              options
-                                  .map(
-                                    (text) => PollOption(
-                                      id: const Uuid().v4(),
-                                      text: text,
-                                    ),
-                                  )
-                                  .toList(),
-                          allowMultipleAnswers: allowMultiple,
-                          anonymous: anonymous,
-                        )
-                        .catchError((Object e) {
-                          logger.w('Create poll failed', error: e);
-
-                          return '';
-                        });
+                    _createPoll(
+                      question: question,
+                      options: options,
+                      allowMultiple: allowMultiple,
+                      anonymous: anonymous,
+                    );
                   },
                   child: const Text('Lancer'),
                 ),
@@ -3682,6 +4779,60 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         );
       },
     );
+  }
+
+  /// Création du sondage : erreurs AFFICHÉES à l'hôte (l'ancien code les
+  /// avalait silencieusement) puis diffusion à tous les participants
+  /// (ouverture automatique du panneau chez chacun).
+  Future<void> _createPoll({
+    required String question,
+    required List<String> options,
+    required bool allowMultiple,
+    required bool anonymous,
+  }) async {
+    try {
+      await PollsService.instance.createPoll(
+        meetingId: widget.meetingId,
+        question: question,
+        options:
+            options
+                .map(
+                  (text) => PollOption(id: const Uuid().v4(), text: text),
+                )
+                .toList(),
+        allowMultipleAnswers: allowMultiple,
+        anonymous: anonymous,
+      );
+
+      await _sendData({'type': 'poll_started', 'by': widget.userId});
+
+      if (!mounted) return;
+
+      setState(() {
+        _showPolls = true;
+        _unreadPolls = 0;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sondage lancé — visible par tous les participants ✓'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (e) {
+      logger.w('Create poll failed', error: e);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Sondage impossible : ${e.toString().replaceFirst('Exception: ', '')}',
+            ),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
   }
 
   void _showVoteDialog(Poll poll, PollsService service) {
@@ -3920,8 +5071,25 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         question: text,
         anonymous: false,
       );
+
+      // Notification temps réel aux autres participants (badge + toast).
+      await _sendData({
+        'type': 'question_asked',
+        'sender': widget.userName,
+      });
     } catch (e) {
       logger.w('Ask question failed', error: e);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Question impossible : ${e.toString().replaceFirst('Exception: ', '')}',
+            ),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
     }
   }
 
@@ -4113,6 +5281,97 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                     _showMeetingInfo();
                   },
                 ),
+                ListTile(
+                  leading: const Icon(Icons.poll_outlined, color: Colors.white),
+                  title: const Text(
+                    'Sondages & Q&A',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  trailing:
+                      _unreadPolls > 0
+                          ? Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 2,
+                            ),
+                            decoration: const BoxDecoration(
+                              color: AppColors.error,
+                              borderRadius: BorderRadius.all(
+                                Radius.circular(999),
+                              ),
+                            ),
+                            child: Text(
+                              '$_unreadPolls',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          )
+                          : null,
+                  onTap: () {
+                    Navigator.pop(context);
+
+                    setState(() {
+                      _showPolls = true;
+                      _unreadPolls = 0;
+                    });
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(
+                    Icons.note_alt_outlined,
+                    color: Colors.white,
+                  ),
+                  title: const Text(
+                    'Notes de réunion',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+
+                    setState(() {
+                      _showNotes = true;
+                    });
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.back_hand_outlined,
+                    color: _handRaised ? Colors.orange : Colors.white,
+                  ),
+                  title: Text(
+                    _handRaised ? 'Baisser la main' : 'Lever la main',
+                    style: TextStyle(
+                      color: _handRaised ? Colors.orange : Colors.white,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+
+                    _toggleRaiseHand();
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    _speakerphoneOn
+                        ? Icons.speaker
+                        : Icons.phone_in_talk_outlined,
+                    color: Colors.white,
+                  ),
+                  title: Text(
+                    _speakerphoneOn
+                        ? 'Son : haut-parleur'
+                        : 'Son : écouteur combiné',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+
+                    _toggleSpeakerphone();
+                  },
+                ),
                 if (_isModerator)
                   ListTile(
                     leading: Icon(
@@ -4152,6 +5411,27 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                 ),
                 ListTile(
                   leading: const Icon(
+                    Icons.cameraswitch_outlined,
+                    color: Colors.white,
+                  ),
+                  title: const Text(
+                    'Changer de caméra (avant / arrière)',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  trailing: Text(
+                    _cameraPosition == CameraPosition.front
+                        ? 'Avant'
+                        : 'Arrière',
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+
+                    _switchCamera();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(
                     Icons.dashboard_outlined,
                     color: Colors.white,
                   ),
@@ -4180,21 +5460,24 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                     _toggleCaptions();
                   },
                 ),
-                ListTile(
-                  leading: const Icon(
-                    Icons.screen_share_outlined,
-                    color: Colors.white,
-                  ),
-                  title: Text(
-                    _screenSharing ? 'Arrêter le partage' : 'Partager l’écran',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  onTap: () {
-                    Navigator.pop(context);
+                if (kIsWeb && isScreenShareSupported)
+                  ListTile(
+                    leading: const Icon(
+                      Icons.screen_share_outlined,
+                      color: Colors.white,
+                    ),
+                    title: Text(
+                      _screenSharing
+                          ? 'Arrêter le partage'
+                          : 'Partager l’écran',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
 
-                    _toggleScreenShare();
-                  },
-                ),
+                      _toggleScreenShare();
+                    },
+                  ),
                 ListTile(
                   leading: const Icon(
                     Icons.volume_up_outlined,
@@ -4230,6 +5513,33 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                       Navigator.pop(context);
 
                       _toggleLockMeeting();
+                    },
+                  ),
+                if (_isModerator)
+                  ListTile(
+                    leading: Icon(
+                      Icons.hourglass_top,
+                      color: _waitingRoomEnabled ? Colors.orange : Colors.white,
+                    ),
+                    title: Text(
+                      _waitingRoomEnabled
+                          ? 'Désactiver la salle d\'attente'
+                          : 'Activer la salle d\'attente',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    subtitle: Text(
+                      _waitingRoomEnabled
+                          ? 'Les nouveaux participants entrent directement'
+                          : 'L\'hôte admet chaque participant manuellement',
+                      style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 11,
+                      ),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
+
+                      _toggleWaitingRoom();
                     },
                   ),
                 if (_isModerator)
@@ -4413,6 +5723,26 @@ class _ChatMessage {
     this.fileUrl,
     this.fileName,
   });
+
+  static const _imageExtensions = [
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.webp',
+    '.bmp',
+  ];
+
+  /// Vrai si la pièce jointe est une image (aperçu inline dans la bulle).
+  static bool isImageName(String? name) {
+    if (name == null) return false;
+
+    final lower = name.toLowerCase();
+
+    return _imageExtensions.any(lower.endsWith);
+  }
+
+  bool get isImageAttachment => isImageName(fileName);
 }
 
 // =============================================================================
@@ -4425,6 +5755,21 @@ class _ChatBubble extends StatelessWidget {
   final bool isMe;
 
   const _ChatBubble({required this.message, required this.isMe});
+
+  /// Ouvre la pièce jointe dans un nouvel onglet (web) / app externe.
+  static Future<void> _openAttachment(String url) async {
+    final uri = Uri.tryParse(url);
+
+    if (uri == null) return;
+
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {
+      // Lancement impossible : silencieux côté UI.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4470,26 +5815,57 @@ class _ChatBubble extends StatelessWidget {
                 height: 1.35,
               ),
             ),
-            if (message.fileUrl != null)
+            // Aperçu inline pour les photos partagées dans le chat.
+            if (message.fileUrl != null && message.isImageAttachment)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: GestureDetector(
+                  onTap: () => _openAttachment(message.fileUrl!),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.network(
+                      message.fileUrl!,
+                      width: 240,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, progress) {
+                        if (progress == null) return child;
+
+                        return Container(
+                          width: 240,
+                          height: 160,
+                          color: Colors.white10,
+                          alignment: Alignment.center,
+                          child: const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white54,
+                            ),
+                          ),
+                        );
+                      },
+                      errorBuilder: (context, error, stackTrace) {
+                        return Container(
+                          width: 240,
+                          height: 44,
+                          color: Colors.black26,
+                          alignment: Alignment.center,
+                          child: const Text(
+                            'Aperçu indisponible — toucher pour ouvrir',
+                            style: TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            if (message.fileUrl != null && !message.isImageAttachment)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: InkWell(
-                  onTap: () async {
-                    final uri = Uri.tryParse(message.fileUrl!);
-
-                    if (uri == null) return;
-
-                    try {
-                      if (await canLaunchUrl(uri)) {
-                        await launchUrl(
-                          uri,
-                          mode: LaunchMode.externalApplication,
-                        );
-                      }
-                    } catch (_) {
-                      // Lancement impossible : silencieux côté UI.
-                    }
-                  },
+                  onTap: () => _openAttachment(message.fileUrl!),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
@@ -4670,7 +6046,11 @@ class _Avatar extends StatelessWidget {
 
   final bool large;
 
-  const _Avatar({required this.name}) : large = false;
+  /// UID Firebase (= identité LiveKit) : permet d'afficher la VRAIE photo
+  /// de profil au lieu des initiales.
+  final String? uid;
+
+  const _Avatar({required this.name, this.uid}) : large = false;
 
   @override
   Widget build(BuildContext context) {
@@ -4679,22 +6059,53 @@ class _Avatar extends StatelessWidget {
     final initial =
         name.trim().isEmpty ? '?' : name.trim().characters.first.toUpperCase();
 
+    final photo = uid == null || uid!.trim().isEmpty
+        ? null
+        : ParticipantPhotoCache.photoFor(uid!.trim());
+
     return Container(
       width: size,
       height: size,
+      clipBehavior: Clip.antiAlias,
       decoration: const BoxDecoration(
         gradient: AppColors.primaryGradient,
         shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
-      child: Text(
-        initial,
-        style: TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w800,
-          fontSize: large ? 28 : 17,
-        ),
-      ),
+      child: photo == null
+          ? Text(
+              initial,
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: large ? 28 : 17,
+              ),
+            )
+          : FutureBuilder<Uint8List?>(
+              future: photo,
+              builder: (context, snap) {
+                final bytes = snap.data;
+
+                if (bytes == null) {
+                  return Text(
+                    initial,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: large ? 28 : 17,
+                    ),
+                  );
+                }
+
+                return Image.memory(
+                  bytes,
+                  fit: BoxFit.cover,
+                  width: size,
+                  height: size,
+                  gaplessPlayback: true,
+                );
+              },
+            ),
     );
   }
 }

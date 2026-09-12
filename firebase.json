@@ -1,1 +1,94 @@
-{"firestore":{"rules":"firestore.rules","indexes":"firestore.indexes.json"},"functions":{"source":"functions"},"hosting":{"public":"web/public","ignore":["firebase.json","**/.*","**/node_modules/**"],"rewrites":[{"source":"/join/**","destination":"/join/index.html"},{"source":"/login","destination":"/login/index.html"},{"source":"/signup","destination":"/signup/index.html"},{"source":"/app","destination":"/app/index.html"},{"source":"/app/**","destination":"/app/index.html"},{"source":"**","destination":"/index.html"}],"headers":[{"source":"/.well-known/assetlinks.json","headers":[{"key":"Content-Type","value":"application/json"},{"key":"Cache-Control","value":"no-cache"}]},{"source":"**","headers":[{"key":"X-Frame-Options","value":"SAMEORIGIN"},{"key":"X-Content-Type-Options","value":"nosniff"}]}]},"flutter":{"platforms":{"android":{"default":{"projectId":"crux-3c6be","appId":"1:33175700363:android:47532d59f11f2e1a66658e","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"crux-3c6be","configurations":{"android":"1:33175700363:android:47532d59f11f2e1a66658e","web":"1:33175700363:web:8dff2f40e10d1ead66658e"}}}}}}
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "hosting": {
+    "public": "web/public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/join/**",
+        "destination": "/join/index.html"
+      },
+      {
+        "source": "/login",
+        "destination": "/login/index.html"
+      },
+      {
+        "source": "/signup",
+        "destination": "/signup/index.html"
+      },
+      {
+        "source": "/app",
+        "destination": "/app/index.html"
+      },
+      {
+        "source": "/app/**",
+        "destination": "/app/index.html"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/.well-known/assetlinks.json",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "X-Frame-Options",
+            "value": "SAMEORIGIN"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          }
+        ]
+      }
+    ]
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "crux-3c6be",
+          "appId": "1:33175700363:android:47532d59f11f2e1a66658e",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "crux-3c6be",
+          "configurations": {
+            "android": "1:33175700363:android:47532d59f11f2e1a66658e",
+            "web": "1:33175700363:web:8dff2f40e10d1ead66658e"
+          }
+        }
+      }
+    }
+  },
+  "storage": {
+    "rules": "storage.rules"
+  }
+}

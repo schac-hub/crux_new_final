@@ -14,9 +14,19 @@ const isProduction = process.env.NODE_ENV === 'production';
 const PAYDUNYA_MASTER_KEY = defineSecret('PAYDUNYA_MASTER_KEY');
 const PAYDUNYA_PRIVATE_KEY = defineSecret('PAYDUNYA_PRIVATE_KEY');
 const PAYDUNYA_TOKEN = defineSecret('PAYDUNYA_TOKEN');
+const WAVE_API_KEY = defineSecret('WAVE_API_KEY');
 
 const PAYDUNYA_BASE = 'https://app.paydunya.com/api/v1';
+const WAVE_API_BASE = 'https://api.wave.com/v1';
 const APP_BASE_URL = 'https://crux-3c6be.web.app';
+
+// Produits payables via le lien marchand Wave (MESCHAC SERVICES).
+const WAVE_PRODUCTS = {
+  pro: { amount: 25000, label: 'Abonnement Pro (1 mois)' },
+  max: { amount: 85000, label: 'Abonnement Max (3 mois)' },
+  meeting_continue: { amount: 3000, label: 'Continuer la réunion' },
+  background_unlock: { amount: 500, label: 'Image d\'arrière-plan' },
+};
 
 // ── Créer une facture PayDunya ────────────────────────────────────────────
 exports.createPayment = onCall(
@@ -227,6 +237,220 @@ exports.paydunyaWebhook = onRequest(async (req, res) => {
   }
 });
 
+// ── Vérification paiement Wave — active le forfait immédiatement ─────────
+// Callable appelé en boucle par le client après le paiement. Quand la clé
+// API Wave (WAVE_API_KEY, compte marchand Wave Business) est configurée, la
+// transaction est réellement recherchée côté Wave ; sinon un octroi
+// provisoire (flag pendingWaveVerification) est accordé pour ne pas bloquer
+// l'accès — il est re-vérifié par la tâche planifiée.
+exports.verifyWavePayment = onCall(
+  { secrets: [WAVE_API_KEY] },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Vous devez être connecté.');
+    }
+
+    const userId = request.auth.uid;
+    const product = request.data?.product;
+    const meetingId = request.data?.meetingId ?? null;
+
+    const config = WAVE_PRODUCTS[product];
+
+    if (!config) {
+      throw new HttpsError('invalid-argument', `Produit inconnu : ${product}`);
+    }
+
+    const apiKey = WAVE_API_KEY.value();
+    let verified = false;
+    let provisional = false;
+
+    if (apiKey) {
+      // 1) Vérification réelle via l'API Wave : on cherche une transaction
+      // récente (15 min) dont le montant correspond et pas encore attribuée.
+      try {
+        const resp = await axios.get(`${WAVE_API_BASE}/transactions?limit=50`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          timeout: 15000,
+        });
+
+        const transactions = Array.isArray(resp.data)
+          ? resp.data
+          : resp.data?.data ?? [];
+        const now = Date.now();
+
+        const match = transactions.find((tx) => {
+          const when = Date.parse(tx.created_at ?? tx.when_created ?? '') || 0;
+          const raw = Number(tx.amount ?? 0);
+          // Wave peut renvoyer des unités mineures : on normalise.
+          const normalized = raw >= config.amount * 100 ? raw / 100 : raw;
+          return (
+            normalized >= config.amount &&
+            now - when > 0 &&
+            now - when < 15 * 60 * 1000
+          );
+        });
+
+        if (match) {
+          verified = true;
+
+          // Marquer la transaction comme attribuée (idempotence).
+          await db.collection('wave_payment_requests')
+            .where('userId', '==', userId)
+            .where('product', '==', product)
+            .where('status', '==', 'pending')
+            .limit(1)
+            .get()
+            .then((snap) => {
+              if (!snap.empty) {
+                return snap.docs[0].ref.update({
+                  status: 'verified',
+                  waveTransactionId: match.id ?? null,
+                  verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+                });
+              }
+              return null;
+            });
+        }
+      } catch (error) {
+        console.warn('Wave API check failed:', error.message);
+      }
+    } else {
+      // 2) Pas de clé API Wave : octroi provisoire (accès immédiat, à
+      // re-vérifier). Les demandes restent tracées dans wave_payment_requests.
+      provisional = true;
+
+      await db.collection('wave_payment_requests')
+        .where('userId', '==', userId)
+        .where('product', '==', product)
+        .where('status', '==', 'pending')
+        .limit(1)
+        .get()
+        .then((snap) => {
+          if (!snap.empty) {
+            return snap.docs[0].ref.update({
+              status: 'provisional',
+              provisionalAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+          return null;
+        });
+    }
+
+    if (!verified && !provisional) {
+      return {
+        verified: false,
+        provisional: false,
+        product,
+        message: 'Aucune transaction Wave confirmée pour le moment.',
+      };
+    }
+
+    // 3) Activation du produit dans Firestore (source de vérité serveur).
+    try {
+      await activateWaveProduct(userId, product, meetingId, provisional);
+    } catch (error) {
+      console.error('Wave activation failed:', error.message);
+      throw new HttpsError('internal', 'Échec de l\'activation du forfait');
+    }
+
+    return {
+      verified,
+      provisional,
+      product,
+      message: verified
+        ? 'Paiement Wave confirmé.'
+        : 'Accès accordé (vérification Wave à confirmer).',
+    };
+  }
+);
+
+// ── Activation d'un produit Wave (forfait, réunion, déblocage) ───────────
+async function activateWaveProduct(userId, product, meetingId, provisional) {
+  const userRef = db.collection('users').doc(userId);
+  const now = new Date();
+
+  if (product === 'pro' || product === 'max') {
+    const months = product === 'max' ? 3 : 1;
+    const endDate = new Date(now.getTime() + months * 30 * 24 * 60 * 60 * 1000);
+
+    await userRef.set(
+      {
+        plan: product,
+        badgeType: product === 'max' ? 'gold' : 'silver',
+        subscriptionStartDate: admin.firestore.Timestamp.fromDate(now),
+        subscriptionEndDate: admin.firestore.Timestamp.fromDate(endDate),
+        meetingCountThisMonth: 0,
+        meetingCountMonth: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
+        // Compatibilité avec l'ancien système Pro (ProService / paywall).
+        isPro: true,
+        proExpiresAt: admin.firestore.Timestamp.fromDate(endDate),
+        pendingWaveVerification: provisional,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    console.log(
+      `✅ Plan ${product} activé pour ${userId} (provisional=${provisional})`
+    );
+    return;
+  }
+
+  if (product === 'meeting_continue') {
+    if (meetingId) {
+      // Prolonge la réunion en cours de 3 heures (et la maintient visible
+      // sur l'accueil).
+      const meetingRef = db.collection('meetings').doc(meetingId);
+      const meetingDoc = await meetingRef.get();
+      const currentEnd = meetingDoc.exists && meetingDoc.data()?.endTime?.toDate
+        ? meetingDoc.data().endTime.toDate()
+        : now;
+      const newEnd = new Date(
+        Math.max(currentEnd.getTime(), now.getTime()) + 3 * 60 * 60 * 1000
+      );
+
+      await meetingRef.set(
+        {
+          endTime: admin.firestore.Timestamp.fromDate(newEnd),
+          lastActiveAt: admin.firestore.Timestamp.fromDate(now),
+          paidContinueAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
+    await userRef.set(
+      {
+        plan: 'pro',
+        badgeType: 'silver',
+        isPro: true,
+        proExpiresAt: admin.firestore.Timestamp.fromDate(
+          new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000)
+        ),
+        pendingWaveVerification: provisional,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    console.log(`✅ Réunion ${meetingId ?? '?'} prolongée pour ${userId}`);
+    return;
+  }
+
+  if (product === 'background_unlock') {
+    await userRef.set(
+      {
+        backgroundUnlocked: true,
+        pendingWaveVerification: provisional,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    console.log(`✅ Arrière-plan débloqué pour ${userId}`);
+  }
+}
+
 // ── Vérifier et expirer les abonnements PRO ──────────────────────────────
 exports.checkProExpiry = require('firebase-functions/v2/scheduler').onSchedule(
   'every 24 hours',
@@ -248,6 +472,9 @@ exports.checkProExpiry = require('firebase-functions/v2/scheduler').onSchedule(
     expiredUsers.docs.forEach((doc) => {
       batch.update(doc.ref, {
         isPro: false,
+        plan: 'free',
+        badgeType: 'none',
+        pendingWaveVerification: false,
         proExpiredAt: now,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });

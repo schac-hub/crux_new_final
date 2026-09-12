@@ -25,8 +25,13 @@ class _GuestJoinScreenState extends State<GuestJoinScreen> {
   String? _error;
   bool _needsPasscode = false;
   bool _meetingExists = true;
+  bool _meetingEnded = false;
   String _meetingTitle = 'Réunion';
   bool _isLarge = false;
+
+  /// ID de document résolu : le paramètre du lien peut être un CODE de
+  /// réunion (ABC-DEFG-HIJ, réunions programmées) et non un ID Firestore.
+  String? _resolvedMeetingId;
 
   @override
   void initState() {
@@ -35,12 +40,23 @@ class _GuestJoinScreenState extends State<GuestJoinScreen> {
   }
 
   Future<void> _checkMeeting() async {
-    final meeting = await MeetingService().getMeetingOnce(
-      widget.meetingId.trim().toUpperCase(),
+    // Résout ID de document OU code de réunion (liens partagés).
+    final doc = await MeetingService().resolveMeetingDoc(
+      widget.meetingId.trim(),
     );
     if (!mounted) return;
-    if (meeting == null) {
+    if (doc == null) {
       setState(() => _meetingExists = false);
+      return;
+    }
+    final meeting = MeetingModel.fromDoc(doc.id, doc.data()!);
+    setState(() => _resolvedMeetingId = doc.id);
+    if (meeting.status == MeetingStatus.ended) {
+      // L'hôte a clôturé la réunion : plus aucune entrée possible.
+      setState(() {
+        _meetingExists = false;
+        _meetingEnded = true;
+      });
       return;
     }
     setState(() {
@@ -73,7 +89,9 @@ class _GuestJoinScreenState extends State<GuestJoinScreen> {
 
       // 2. Check passcode if needed
       if (_needsPasscode) {
-        final meeting = await MeetingService().getMeetingOnce(widget.meetingId);
+        final meeting = await MeetingService().getMeetingOnce(
+          _resolvedMeetingId ?? widget.meetingId,
+        );
         if (meeting?.passcode != null &&
             meeting!.passcode!.isNotEmpty &&
             meeting.passcode != _passcodeCtrl.text.trim()) {
@@ -96,6 +114,14 @@ class _GuestJoinScreenState extends State<GuestJoinScreen> {
         }, SetOptions(merge: true));
       } catch (_) {}
 
+      // 4. Enregistrer l'invité dans `participants` : sans cela les règles
+      // Firestore lui refusaient chat, sondages et fichiers.
+      final resolvedId = _resolvedMeetingId ?? widget.meetingId;
+
+      try {
+        await MeetingService().addParticipant(resolvedId, uid);
+      } catch (_) {}
+
       if (!mounted) return;
 
       if (_isLarge) {
@@ -104,7 +130,7 @@ class _GuestJoinScreenState extends State<GuestJoinScreen> {
           MaterialPageRoute(
             builder:
                 (_) => LargeConferenceScreen(
-                  meetingId: widget.meetingId,
+                  meetingId: resolvedId,
                   meetingName: _meetingTitle,
                   userId: uid,
                   userName: name,
@@ -119,7 +145,7 @@ class _GuestJoinScreenState extends State<GuestJoinScreen> {
           MaterialPageRoute(
             builder:
                 (_) => MeetingScreen(
-                  meetingId: widget.meetingId,
+                  meetingId: resolvedId,
                   meetingName: _meetingTitle,
                   userId: uid,
                   userName: name,
@@ -168,10 +194,14 @@ class _GuestJoinScreenState extends State<GuestJoinScreen> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(Icons.link_off, size: 64, color: Colors.white38),
+        Icon(
+          _meetingEnded ? Icons.meeting_room : Icons.link_off,
+          size: 64,
+          color: Colors.white38,
+        ),
         const SizedBox(height: 20),
         Text(
-          'Réunion introuvable',
+          _meetingEnded ? 'Réunion terminée' : 'Réunion introuvable',
           style: GoogleFonts.poppins(
             color: Colors.white,
             fontSize: 20,
@@ -180,7 +210,10 @@ class _GuestJoinScreenState extends State<GuestJoinScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Le code ${widget.meetingId} n\'existe pas ou a expiré.',
+          _meetingEnded
+              ? 'L\'hôte a clôturé la réunion ${widget.meetingId}. '
+                  'Elle n\'est plus accessible.'
+              : 'Le code ${widget.meetingId} n\'existe pas ou a expiré.',
           textAlign: TextAlign.center,
           style: GoogleFonts.poppins(color: Colors.white54, fontSize: 14),
         ),

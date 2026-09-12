@@ -104,7 +104,7 @@ class AppConfig {
   // FREE
   // ===========================================================================
 
-  static const int freeMeetingDurationMinutes = 45;
+  static const int freeMeetingDurationMinutes = 105; // 1 h 45 min
 
   // ===========================================================================
   // FIRESTORE

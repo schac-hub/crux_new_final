@@ -5,6 +5,8 @@ import 'package:logger/logger.dart';
 
 import '../models/meeting_model.dart';
 import '../models/scheduled_meeting_model.dart';
+import '../models/user_model.dart';
+import '../services/payment_service.dart';
 
 export '../models/meeting_model.dart';
 export '../models/scheduled_meeting_model.dart';
@@ -80,6 +82,33 @@ class MeetingService {
     try {
       final userId = _getCurrentUserId();
 
+      // Initialize payment service and check subscription
+      final paymentService = PaymentService();
+      final userDoc =
+          await _firestore.collection('users').doc(userId).get();
+      final userData = userDoc.data();
+
+      // Profil abonnement (null = forfait gratuit par défaut).
+      UserModel? userModel;
+
+      if (userData == null) {
+        // User has no subscription document, treat as free plan
+      } else {
+        userModel = UserModel.fromJson(userData);
+        // Abonnement expiré : on retombe sur le forfait gratuit.
+        if (!paymentService.isSubscriptionActive(userModel) &&
+            userModel.plan != SubscriptionPlan.free) {
+          throw Exception('subscription_expired');
+        }
+        // Quota mensuel appliqué à TOUS les forfaits :
+        // free 3 réunions, pro 10, max illimité.
+        if (paymentService.hasExceededLimit(userModel)) {
+          throw Exception('meeting_limit_exceeded');
+        }
+        // Nouveau mois : remise à zéro du compteur.
+        await paymentService.resetMonthlyCounterIfNeeded(userId);
+      }
+
       final cleanTitle = title.trim();
       final cleanDescription = description.trim();
       final cleanOrganizerName = organizerName.trim();
@@ -130,7 +159,7 @@ class MeetingService {
         organizer: cleanOrganizerName,
         organizerId: finalOrganizerId,
         startTime: now,
-        endTime: now.add(const Duration(hours: 1)),
+        endTime: _calculateMeetingEndTime(now, userModel),
         participants: [finalOrganizerId],
         channelName: meetingId,
         status: MeetingStatus.ongoing,
@@ -166,6 +195,16 @@ class MeetingService {
 
       if (!written) {
         throw Exception('firestore_write_failed');
+      }
+
+      // Incrémenter le compteur de réunions du mois
+      try {
+        await PaymentService().incrementMeetingCount(
+          userId: userId,
+          count: 1,
+        );
+      } catch (e) {
+        _log.w('Failed to increment meeting count: $e');
       }
 
       // Vérification serveur.
@@ -455,6 +494,51 @@ class MeetingService {
   // GET MEETING BY CODE
   // ---------------------------------------------------------------------------
 
+  /// Résout un identifiant de réunion qui peut être soit l'ID du document
+  /// Firestore, soit un CODE de réunion (`ABC-DEFG-HIJ`). Les liens de
+  /// partage des réunions programmées embarquent le CODE : sans ce
+  /// résolveur, `/join/{code}` cherchait un document inexistant →
+  /// « Réunion introuvable ». Retourne le snapshot du document résolu.
+  Future<DocumentSnapshot<Map<String, dynamic>>?> resolveMeetingDoc(
+    String idOrCode,
+  ) async {
+    final key = idOrCode.trim();
+
+    if (key.isEmpty) return null;
+
+    // 1. Essai direct par ID de document.
+    try {
+      final direct = await _firestore.collection('meetings').doc(key).get();
+
+      if (direct.exists && direct.data() != null) {
+        return direct;
+      }
+    } catch (e) {
+      _log.w('resolveMeetingDoc direct lookup failed: $e');
+    }
+
+    // 2. Fallback : le segment est un code de réunion.
+    final upper = key.toUpperCase();
+
+    for (final useServer in const [true, false]) {
+      try {
+        final snap = await _firestore
+            .collection('meetings')
+            .where('meetingCode', isEqualTo: upper)
+            .limit(1)
+            .get(useServer ? const GetOptions(source: Source.server) : null);
+
+        if (snap.docs.isNotEmpty) {
+          return snap.docs.first;
+        }
+      } catch (e) {
+        _log.w('resolveMeetingDoc code lookup ($useServer) failed: $e');
+      }
+    }
+
+    return null;
+  }
+
   Future<MeetingModel?> getMeetingByCode(String meetingCode) async {
     final upperCode = meetingCode.trim().toUpperCase();
 
@@ -682,6 +766,116 @@ class MeetingService {
     }
   }
 
+  /// Expulsion d'un participant par l'hôte : la fiche `kicked/{userId}` est
+  /// écoutée par le client visé, qui se déconnecte IMMÉDIATEMENT (sans
+  /// attendre d'appuyer sur « OK »). Le document persiste : le participant
+  /// expulsé ne peut pas rejoindre à nouveau cette réunion.
+  Future<void> kickParticipant(
+    String meetingId,
+    String userId, {
+    String? kickedBy,
+  }) async {
+    try {
+      await _firestore
+          .collection('meetings')
+          .doc(meetingId)
+          .collection('kicked')
+          .doc(userId)
+          .set({
+            'userId': userId,
+            'kickedAt': FieldValue.serverTimestamp(),
+            if (kickedBy != null) 'kickedBy': kickedBy,
+          });
+    } catch (e, stackTrace) {
+      _log.e('kickParticipant error: $e', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+
+
+  // ---------------------------------------------------------------------------
+  // SALLE D'ATTENTE (réunions privées : l'hôte admet les participants)
+  // ---------------------------------------------------------------------------
+
+  /// Active/désactive la salle d'attente sur la réunion.
+  Future<void> setWaitingRoom(String meetingId, bool enabled) async {
+    try {
+      await _firestore.collection('meetings').doc(meetingId).update({
+        'waitingRoomEnabled': enabled,
+      });
+    } catch (e, stackTrace) {
+      _log.e('setWaitingRoom error: $e', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+
+  /// Le participant en attente se déclare (salle d'attente).
+  Future<void> requestAdmission(
+    String meetingId,
+    String userId,
+    String userName,
+  ) async {
+    try {
+      await _firestore
+          .collection('meetings')
+          .doc(meetingId)
+          .collection('waiting')
+          .doc(userId)
+          .set({
+            'userId': userId,
+            'name': userName,
+            'requestedAt': FieldValue.serverTimestamp(),
+          });
+    } catch (e, stackTrace) {
+      _log.e('requestAdmission error: $e', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+
+  /// Liste temps réel des participants en attente (vue hôte).
+  Stream<QuerySnapshot<Map<String, dynamic>>> streamWaiting(String meetingId) {
+    return _firestore
+        .collection('meetings')
+        .doc(meetingId)
+        .collection('waiting')
+        .orderBy('requestedAt')
+        .snapshots();
+  }
+
+  /// Admission : fiche supprimée (le client en attente passe) + ajouté aux
+  /// participants pour l'accès aux règles Firestore (chat, sondages…).
+  Future<void> admitParticipant(String meetingId, String userId) async {
+    try {
+      await _firestore
+          .collection('meetings')
+          .doc(meetingId)
+          .collection('waiting')
+          .doc(userId)
+          .delete();
+
+      await addParticipant(meetingId, userId);
+    } catch (e, stackTrace) {
+      _log.e('admitParticipant error: $e', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+
+  /// Refus : décision écrite sur la fiche ; le client en attente la lit et
+  /// se retire, puis l'hôte supprime la fiche.
+  Future<void> denyParticipant(String meetingId, String userId) async {
+    try {
+      await _firestore
+          .collection('meetings')
+          .doc(meetingId)
+          .collection('waiting')
+          .doc(userId)
+          .update({'decision': 'denied'});
+    } catch (e, stackTrace) {
+      _log.e('denyParticipant error: $e', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // PRESENCE
   // ---------------------------------------------------------------------------
@@ -689,8 +883,9 @@ class MeetingService {
   Future<void> registerPresence(
     String meetingId,
     String userId,
-    String userName,
-  ) async {
+    String userName, {
+    String? photoUrl,
+  }) async {
     try {
       await _firestore
           .collection('meetings')
@@ -700,6 +895,8 @@ class MeetingService {
           .set({
             'userId': userId,
             'name': userName,
+            if (photoUrl != null && photoUrl.isNotEmpty)
+              'photoUrl': photoUrl,
             'micOn': true,
             'camOn': true,
             'handRaised': false,
@@ -951,6 +1148,59 @@ class MeetingService {
       _log.e('isUserHostOfMeeting error: $e', error: e, stackTrace: stackTrace);
 
       return false;
+    }
+  }
+
+  DateTime _calculateMeetingEndTime(DateTime startTime, UserModel? userModel) {
+    // Free tier: 1h45min (105 minutes)
+    // Pro/Max: unlimited (very long duration)
+    final plan = userModel?.plan;
+    
+    if (plan == SubscriptionPlan.free) {
+      return startTime.add(freeTierDuration);
+    } else {
+      // Pro and Max have effectively unlimited meetings, 
+      // but set a very long duration (24 hours) for the meeting itself
+      return startTime.add(const Duration(hours: 24));
+    }
+  }
+
+  /// Handle free tier expiry - eject host and participants
+  ///
+  /// Sans paramètre UI : le service n'a pas de contexte Flutter. Le statut
+  /// passe à `ended` ; l'écran de réunion réagit au snapshot (voile « Réunion
+  /// terminée ») et gère lui-même la déconnexion LiveKit.
+  Future<void> handleFreeTierExpiry({required String meetingId}) async {
+    try {
+      // Update meeting status to ended
+      await updateMeetingStatus(meetingId, MeetingStatus.ended);
+
+      _log.i('Free tier expired for meeting $meetingId, meeting ended');
+    } catch (e, stackTrace) {
+      _log.e('handleFreeTierExpiry error: $e', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  /// Pousse `endTime` vers l'avant tant que la réunion est en cours.
+  ///
+  /// L'écran d'accueil liste les réunions dont `endTime` est dans le futur :
+  /// sans ce « battement de cœur », une réunion en cours disparaissait de
+  /// l'accueil dès que la durée initiale était dépassée. Appelé
+  /// périodiquement par l'hôte ; l'horizon est porté à [ahead].
+  Future<void> pushMeetingEndTime(
+    String meetingId, {
+    Duration ahead = const Duration(minutes: 20),
+  }) async {
+    try {
+      final now = DateTime.now();
+      final horizon = now.add(ahead);
+
+      await _firestore.collection('meetings').doc(meetingId).set({
+        'endTime': Timestamp.fromDate(horizon),
+        'lastActiveAt': Timestamp.fromDate(now),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      _log.w('pushMeetingEndTime failed for $meetingId: $e');
     }
   }
 }

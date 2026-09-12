@@ -82,6 +82,9 @@ dependencies:
   # API web moderne (remplace dart:html) : téléchargement de fichiers sur web
   web: ^1.1.1
 
+  # Sons de notification en réunion (chat, main levée, entrées/sorties)
+  audioplayers: ^6.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -102,3 +105,4 @@ flutter:
 
   assets:
     - assets/images/
+    - assets/sounds/

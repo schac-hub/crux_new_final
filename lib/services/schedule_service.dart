@@ -34,9 +34,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/meeting_model.dart';
+import '../models/user_model.dart';
 import '../utils/date_flex.dart';
 import '../utils/logger.dart';
 import '../utils/meeting_notification_manager.dart';
+import 'payment_service.dart';
 
 /// Liens de partage. (Évite de dupliquer des URLs en dur dans les écrans.)
 class CruxLinks {
@@ -161,6 +163,36 @@ class ScheduleService {
       }
     }
 
+    // Quota mensuel : une réunion planifiée compte comme une réunion
+    // immédiate (free 3, pro 10, max illimité).
+    final payment = PaymentService();
+    final userDoc = await _db.collection('users').doc(user.uid).get();
+    final userData = userDoc.data();
+
+    if (userData != null) {
+      final userModel = UserModel.fromJson(userData);
+
+      if (!payment.isSubscriptionActive(userModel) &&
+          userModel.plan != SubscriptionPlan.free) {
+        throw const ScheduleException(
+          'Votre abonnement a expiré. Renouvelez-le pour planifier '
+          'une réunion.',
+          code: 'subscription-expired',
+        );
+      }
+
+      if (payment.hasExceededLimit(userModel)) {
+        throw const ScheduleException(
+          'Vous avez atteint votre quota de réunions ce mois-ci. '
+          'Passez au forfait Pro ou Max pour continuer.',
+          code: 'meeting-limit-exceeded',
+        );
+      }
+
+      // Nouveau mois : remise à zéro du compteur.
+      await payment.resetMonthlyCounterIfNeeded(user.uid);
+    }
+
     if (_inFlight) {
       throw const ScheduleException(
         'Planification déjà en cours…',
@@ -266,6 +298,14 @@ class ScheduleService {
             fiveMin: notifyAtFiveMin,
             atStart: notifyAtStart,
           );
+
+      // La réunion planifiée consomme le quota mensuel (même règle que les
+      // réunions immédiates) ; l'échec d'incrément ne bloque pas la création.
+      try {
+        await payment.incrementMeetingCount(userId: user.uid);
+      } catch (e) {
+        logger.w('incrementMeetingCount (scheduled) failed: $e');
+      }
 
       logger.i('📅 Réunion planifiée $meetingId à $startTime ($code)');
 
@@ -423,9 +463,12 @@ class ScheduleService {
 
   // ------------------------------------------------------------------ helper
 
-  static const _alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+  /// Alphabet SANS caractères ambigus, en MAJUSCULES : tous les codes de
+  /// réunion CRUX sont normalisés en majuscules (recherche par code, écran
+  /// « Rejoindre », deep links) — un code minuscule était introuvable.
+  static const _alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
-  /// Code type `abc-defg-hij` (sans caractères ambigus).
+  /// Code type `ABC-DEFG-HIJ` (sans caractères ambigus).
   String _generateCode() {
     final rnd = Random.secure();
     String block(int n) =>

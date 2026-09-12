@@ -16,6 +16,7 @@ import '../providers/locale_provider.dart';
 import '../services/note_service.dart';
 import '../services/user_service.dart';
 import '../theme/colors.dart';
+import '../models/user_model.dart';
 import '../widgets/elegant_toast.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -770,6 +771,58 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Widget _buildSubscriptionBadge() {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+
+    // Lecture Firestore via FutureBuilder : la méthode build reste synchrone.
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: _db.collection('users').doc(uid).get(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || !snapshot.data!.exists) {
+          return const SizedBox.shrink();
+        }
+
+        try {
+          final userData = UserModel.fromJson(snapshot.data!.data()!);
+          final badgeType = userData.effectiveBadgeType;
+
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: badgeType.color.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: badgeType.color.withValues(alpha: 0.5),
+              ),
+            ),
+            child: Text(
+              _getBadgeLabel(userData.effectivePlan),
+              style: GoogleFonts.poppins(
+                color: badgeType.color,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          );
+        } catch (_) {
+          return const SizedBox.shrink();
+        }
+      },
+    );
+  }
+
+  String _getBadgeLabel(SubscriptionPlan plan) {
+    switch (plan) {
+      case SubscriptionPlan.max:
+        return 'Max';
+      case SubscriptionPlan.pro:
+        return 'Pro';
+      case SubscriptionPlan.free:
+        return 'Free';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final lang = context.watch<LocaleProvider>().locale.languageCode;
@@ -929,6 +982,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                                 title: AppTranslations.t('email', lang),
                                 subtitle: user?.email ?? '—',
                               ),
+// Subscription badge - always show based on Firestore data
+                              _buildSubscriptionBadge(),
                             ],
                           ),
                         ),

@@ -44,6 +44,20 @@ class MeetingNotificationManager {
   bool _ready = false;
   bool _exactAlarmAllowed = true;
 
+  /// Callback déclenché quand l'utilisateur touche un rappel de réunion.
+  /// Câblé par `main.dart` : navigue vers l'écran de réunion.
+  static void Function(String meetingId)? onMeetingTap;
+
+  void _handlePayload(String? payload) {
+    if (payload == null || !payload.startsWith('meeting:')) return;
+
+    final meetingId = payload.substring('meeting:'.length).trim();
+
+    if (meetingId.isEmpty) return;
+
+    onMeetingTap?.call(meetingId);
+  }
+
   /// À appeler une fois au démarrage, **avant** toute planification.
   /// (dans `main()`, juste après `NotificationService().initialize()`)
   Future<void> initialize() async {
@@ -67,7 +81,20 @@ class MeetingNotificationManager {
       );
       await _ln.initialize(
         const InitializationSettings(android: androidInit, iOS: iosInit),
+        // Toucher un rappel doit OUVRIR la réunion (sinon la notification
+        // ne servait qu'à prévenir, sans action).
+        onDidReceiveNotificationResponse: (response) {
+          _handlePayload(response.payload);
+        },
       );
+
+      // Lancement à froid directement depuis un rappel (app fermée).
+      try {
+        final launch = await _ln.getNotificationAppLaunchDetails();
+        if (launch?.didNotificationLaunchApp == true) {
+          _handlePayload(launch!.notificationResponse?.payload);
+        }
+      } catch (_) {}
 
       if (Platform.isAndroid) {
         final android =

@@ -13,13 +13,13 @@ class ProService {
 
   static const _priceXof = 25000;
 
-  Future<bool> checkProStatus(String userId) async {
-    try {
-      final doc = await _db.collection('users').doc(userId).get();
-      if (!doc.exists) return false;
-      final data = doc.data()!;
-      if (data['isPro'] != true) return false;
-
+  /// Pro si l'ancien système (isPro + proExpiresAt) OU le nouveau système de
+  /// forfaits (plan pro/max + subscriptionEndDate valide) est actif.
+  /// Lecture directe de la doc : l'accès aux fonctionnalités est donc
+  /// immédiat dès que le paiement est activé.
+  static bool _isProData(Map<String, dynamic> data) {
+    // ── Ancien système ──
+    if (data['isPro'] == true) {
       final expiresAt = data['proExpiresAt'];
       DateTime? expiry;
       if (expiresAt is Timestamp) {
@@ -29,9 +29,31 @@ class ProService {
       } else if (expiresAt is int) {
         expiry = DateTime.fromMillisecondsSinceEpoch(expiresAt);
       }
+      if (expiry != null && expiry.isAfter(DateTime.now())) return true;
+    }
 
-      if (expiry == null) return false;
-      return expiry.isAfter(DateTime.now());
+    // ── Nouveau système de forfaits (Wave / PaymentService) ──
+    final plan = data['plan']?.toString();
+    if (plan == 'pro' || plan == 'max') {
+      final endDate = data['subscriptionEndDate'];
+      DateTime? expiry;
+      if (endDate is Timestamp) {
+        expiry = endDate.toDate();
+      } else if (endDate is String) {
+        expiry = DateTime.tryParse(endDate);
+      }
+      // Pas de date de fin = abonnement considéré actif (free plan exclu).
+      if (expiry == null || expiry.isAfter(DateTime.now())) return true;
+    }
+
+    return false;
+  }
+
+  Future<bool> checkProStatus(String userId) async {
+    try {
+      final doc = await _db.collection('users').doc(userId).get();
+      if (!doc.exists) return false;
+      return _isProData(doc.data()!);
     } catch (_) {
       return false;
     }
@@ -40,21 +62,7 @@ class ProService {
   Stream<bool> proStream(String userId) {
     return _db.collection('users').doc(userId).snapshots().map((snap) {
       if (!snap.exists) return false;
-      final data = snap.data()!;
-      if (data['isPro'] != true) return false;
-
-      final expiresAt = data['proExpiresAt'];
-      DateTime? expiry;
-      if (expiresAt is Timestamp) {
-        expiry = expiresAt.toDate();
-      } else if (expiresAt is String) {
-        expiry = DateTime.tryParse(expiresAt);
-      } else if (expiresAt is int) {
-        expiry = DateTime.fromMillisecondsSinceEpoch(expiresAt);
-      }
-
-      if (expiry == null) return false;
-      return expiry.isAfter(DateTime.now());
+      return _isProData(snap.data()!);
     });
   }
 
