@@ -7,6 +7,7 @@ import '../utils/logger.dart';
 import '../widgets/custom_button.dart';
 import 'meeting_screen.dart';
 import 'large_conference_screen.dart';
+import '../widgets/app_logo.dart';
 
 /// Écran de création d'une réunion (standard ou grande conférence).
 /// Appelé depuis HomeScreen : `CreateMeetingScreen()` ou
@@ -160,11 +161,7 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
                   gradient: AppColors.primaryGradient,
                   borderRadius: BorderRadius.circular(18),
                 ),
-                child: Icon(
-                  widget.largeConference ? Icons.groups : Icons.video_call,
-                  color: Colors.white,
-                  size: 32,
-                ),
+                child: const AppLogoBadge(size: 64, borderRadius: 18),
               ),
               const SizedBox(height: 24),
               Text(

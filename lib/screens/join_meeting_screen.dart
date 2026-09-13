@@ -7,6 +7,7 @@ import '../utils/logger.dart';
 import '../widgets/custom_button.dart';
 import 'meeting_screen.dart';
 import 'large_conference_screen.dart';
+import '../widgets/app_logo.dart';
 
 /// Écran permettant à un utilisateur connecté de rejoindre une réunion
 /// existante via son code. Appelé depuis HomeScreen : `JoinMeetingScreen()`.
@@ -277,19 +278,7 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
                   ),
                   child: Row(
                     children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: const BoxDecoration(
-                          gradient: AppColors.primaryGradient,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.videocam_outlined,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
+                      const AppLogoBadge(size: 40, borderRadius: 20),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(

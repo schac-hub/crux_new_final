@@ -8,6 +8,7 @@ import '../services/meeting_service.dart';
 import '../theme/colors.dart';
 import '../widgets/elegant_toast.dart';
 import 'large_conference_screen.dart';
+import '../widgets/app_logo.dart';
 
 class MeetingScreen extends StatefulWidget {
   final String meetingId;
@@ -491,19 +492,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
       ),
       child: Column(
         children: [
-          Container(
-            width: 64,
-            height: 64,
-            decoration: const BoxDecoration(
-              gradient: AppColors.primaryGradient,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.videocam_outlined,
-              color: AppColors.textOnPrimary,
-              size: 30,
-            ),
-          ),
+          const AppLogoBadge(size: 64, borderRadius: 32),
           const SizedBox(height: 20),
           const Text(
             'Prêt à rejoindre',

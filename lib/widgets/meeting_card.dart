@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import '../theme/colors.dart';
 import '../models/meeting_model.dart';
+import 'app_logo.dart';
 
 class MeetingCard extends StatelessWidget {
   final MeetingModel meeting;
@@ -68,20 +69,8 @@ class MeetingCard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              // Avatar avec dégradé
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  gradient: AppColors.primaryGradient,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Icon(
-                  Icons.videocam_rounded,
-                  color: Colors.white,
-                  size: 28,
-                ),
-              ),
+              // VRAI logo CRUX (plus d'icône caméra en placeholder)
+              const AppLogoBadge(size: 60, borderRadius: 14),
               const SizedBox(width: 16),
 
               // Infos réunion

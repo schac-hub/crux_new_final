@@ -7,6 +7,7 @@ import '../theme/colors.dart';
 import '../services/auth_service.dart';
 import '../utils/logger.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/app_logo.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -219,20 +220,8 @@ class _LoginScreenState extends State<LoginScreen>
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 16),
-                    Center(
-                      child: Container(
-                        width: 72,
-                        height: 72,
-                        decoration: BoxDecoration(
-                          gradient: AppColors.primaryGradient,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: const Icon(
-                          Icons.videocam_rounded,
-                          color: AppColors.textOnPrimary,
-                          size: 36,
-                        ),
-                      ),
+                    const Center(
+                      child: AppLogoBadge(size: 72, borderRadius: 20),
                     ),
                     const SizedBox(height: 24),
                     Text(

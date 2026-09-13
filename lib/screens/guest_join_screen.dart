@@ -6,6 +6,7 @@ import '../services/meeting_service.dart';
 import '../theme/colors.dart';
 import 'meeting_screen.dart';
 import 'large_conference_screen.dart';
+import '../widgets/app_logo.dart';
 
 /// Screen shown when a guest taps a meeting link (crux://join/MEETING_ID).
 /// Signs in anonymously — no account required.
@@ -245,7 +246,7 @@ class _GuestJoinScreenState extends State<GuestJoinScreen> {
             ),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: const Icon(Icons.videocam, color: Colors.white, size: 36),
+          child: const AppLogoBadge(size: 72, borderRadius: 20),
         ),
         const SizedBox(height: 20),
         Text(
