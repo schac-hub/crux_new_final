@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/logger.dart';
 
@@ -57,15 +60,55 @@ class MeetingSounds {
 
   /// Joue un son sans interrompre la réunion ; les erreurs sont silencieuses
   /// (un son manquant ne doit jamais perturber un appel).
+  ///
+  /// RESPECTE le réglage « Ne pas déranger » (Paramètres) : pendant la
+  /// fenêtre horaire configurée, aucun son n'est joué.
   void play(MeetingSound sound) {
+    unawaited(_playIfAllowed(sound));
+  }
+
+  Future<void> _playIfAllowed(MeetingSound sound) async {
+    if (await _isMutedByDnd()) return;
+
     final player = _players[sound];
 
     if (player == null) return;
 
-    player
-        .stop()
-        .then((_) => player.resume())
-        .catchError((Object e) => logger.w('Sound play failed', error: e));
+    try {
+      await player.stop();
+
+      await player.resume();
+    } catch (e) {
+      logger.w('Sound play failed', error: e);
+    }
+  }
+
+  /// Vrai si « Ne pas déranger » est actif ET si l'heure courante est dans
+  /// la fenêtre configurée (gestion des fenêtres à cheval sur minuit).
+  Future<bool> _isMutedByDnd() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      if (prefs.getBool('crux_dnd') != true) return false;
+
+      final startH = prefs.getInt('crux_dnd_start_h') ?? 22;
+      final startM = prefs.getInt('crux_dnd_start_m') ?? 0;
+      final endH = prefs.getInt('crux_dnd_end_h') ?? 8;
+      final endM = prefs.getInt('crux_dnd_end_m') ?? 0;
+
+      final now = DateTime.now();
+      final minutesNow = now.hour * 60 + now.minute;
+      final start = startH * 60 + startM;
+      final end = endH * 60 + endM;
+
+      if (start == end) return false;
+
+      return start < end
+          ? (minutesNow >= start && minutesNow < end)
+          : (minutesNow >= start || minutesNow < end);
+    } catch (_) {
+      return false;
+    }
   }
 
   void dispose() {

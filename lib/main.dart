@@ -90,6 +90,48 @@ void main() {
     );
   };
 
+  // En release, une exception de build s'affichait en PAGE BLANCHE (aucun
+  // diagnostic possible). On affiche désormais un écran lisible avec la
+  // cause — le texte sert au signalement, l'app reste identifiable.
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    return Material(
+      color: const Color(0xFF0F0C1A),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.bug_report_rounded,
+                    color: Colors.redAccent, size: 48),
+                const SizedBox(height: 16),
+                const Text(
+                  'Une erreur est survenue',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  details.exception.toString(),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  };
+
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();

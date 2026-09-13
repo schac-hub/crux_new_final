@@ -122,7 +122,8 @@ class AuthService {
   }
 
   /// CORRIGÉ (bug #6) : branche Web vs Mobile.
-  /// Web : FirebaseAuth.signInWithPopup(GoogleAuthProvider())
+  /// Web : REDIRECTION pleine page (FirebaseAuth.signInWithRedirect) —
+  /// méthode Zoom/Meet, insensible aux bloqueurs de popup.
   /// Mobile : GoogleSignIn → credential → signInWithCredential()
   Future<UserModel?> signInWithGoogle() async {
     try {
@@ -131,53 +132,21 @@ class AuthService {
       User? user;
 
       if (kIsWeb) {
-        // ── WEB : popup via Firebase Auth, avec repli redirection ───────
+        // ── WEB : REDIRECTION PLEINE PAGE (méthode Zoom/Meet) ───────────
+        // Plus de popup du tout : les navigateurs mobiles la bloquent
+        // systématiquement et plusieurs utilisateurs restaient bloqués.
+        // La redirection fonctionne partout ; le résultat arrive via
+        // authStateChanges après le rechargement de la page.
         final provider = GoogleAuthProvider()
           ..addScope('email')
           ..addScope('https://www.googleapis.com/auth/userinfo.profile')
           ..setCustomParameters({'prompt': 'select_account'});
 
-        try {
-          final cred = await _auth
-              .signInWithPopup(provider)
-              .timeout(const Duration(seconds: 15));
-          user = cred.user;
-        } on FirebaseAuthException catch (e) {
-          // Popup BLOQUÉE par le navigateur (très courant sur Chrome
-          // mobile) : le bug historique faisait `rethrow` ici, donc la
-          // connexion Google échouait TOUJOURS sur mobile web. Correct :
-          // basculer sur la redirection pleine page — le résultat arrive
-          // via authStateChanges après le rechargement.
-          if (e.code == 'popup-blocked' ||
-              e.code == 'operation-not-supported-in-this-environment' ||
-              e.code == 'cancelled-popup-request') {
-            redirectInitiated = true;
+        redirectInitiated = true;
 
-            await _auth.signInWithRedirect(provider);
-            return null;
-          }
-          // Utilisateur : il a fermé la popup lui-même → annulation.
-          if (e.code == 'popup-closed-by-user') {
-            return null;
-          }
-          // Domaine non autorisé : la redirection échouerait aussi —
-          // message explicite avec le domaine à ajouter.
-          if (e.code == 'auth/unauthorized-domain' ||
-              e.code == 'unauthorized-domain') {
-            throw Exception(
-              'Connexion Google impossible depuis ce domaine. Ajoutez '
-              '« schac-hub.github.io » dans Firebase Console → '
-              'Authentication → Settings → Authorized domains.',
-            );
-          }
-          rethrow;
-        } on TimeoutException {
-          // Popup trop lente : redirection complète en dernier recours.
-          redirectInitiated = true;
+        await _auth.signInWithRedirect(provider);
 
-          await _auth.signInWithRedirect(provider);
-          return null; // Le résultat arrive après le rechargement de page.
-        }
+        return null; // La connexion se termine après le rechargement.
       } else {
         // ── ANDROID / iOS : GoogleSignIn → credential ─────────────────
         final googleUser = await _googleSignIn.signIn().timeout(

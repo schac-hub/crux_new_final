@@ -360,7 +360,11 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
     // Initialize meeting state provider
     final meetingProvider = context.read<MeetingStateProvider>();
-    final userModel = context.read<UserModel>();
+    // PROFIL LOCAL SANS PROVIDER : aucun provider UserModel n'est enregistré
+    // dans main.dart — `context.read<UserModel>()` levait une
+    // ProviderNotFoundException DANS initState → page blanche systématique
+    // au lancement de réunion (le bug des « pages blanches »).
+    final userModel = _localUser;
     meetingProvider.initializeMeeting(
       meetingId: widget.meetingId,
       meetingName: widget.meetingName,
@@ -370,6 +374,15 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
     _initialize();
   }
+
+  /// Profil de l'utilisateur local construit depuis les paramètres de
+  /// l'écran + la photo Firebase Auth (pas de provider requis).
+  UserModel get _localUser => UserModel(
+    uid: widget.userId,
+    email: widget.userEmail ?? '',
+    name: widget.userName,
+    profileImageUrl: FirebaseAuth.instance.currentUser?.photoURL,
+  );
 
   @override
   void dispose() {
@@ -784,7 +797,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       widget.meetingId,
       widget.userId,
       widget.userName,
-      photoUrl: context.read<UserModel>().profileImageUrl,
+      photoUrl: FirebaseAuth.instance.currentUser?.photoURL,
     );
 
     if (widget.isHost) {
@@ -1184,7 +1197,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         // « Anonymous » (ou l'UID brut) jusqu'au premier événement
         // metadata. La photo suit le même canal.
         if (mounted) {
-          final profilePhoto = context.read<UserModel>().profileImageUrl;
+          final profilePhoto = FirebaseAuth.instance.currentUser?.photoURL;
 
           local.setMetadata(
             jsonEncode({
@@ -3023,7 +3036,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       final local = _room?.localParticipant;
 
       if (local != null && mounted) {
-        final profilePhoto = context.read<UserModel>().profileImageUrl;
+        final profilePhoto = FirebaseAuth.instance.currentUser?.photoURL;
 
         // setMetadata renvoie void (livekit_client <= 2.6.x) ou Future<void>
         // (>= 2.7) selon la version résolue : pas de await, compatible avec

@@ -7,10 +7,11 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../l10n/app_translations.dart';
+import '../config/app_config.dart';
+import '../models/user_model.dart';
 import '../providers/locale_provider.dart';
 import '../providers/theme_provider.dart';
 import '../services/error_handler_service.dart';
-import '../services/pro_service.dart';
 import '../theme/colors.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -23,13 +24,16 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen>
     with SingleTickerProviderStateMixin {
   final ErrorHandlerService _errorHandler = ErrorHandlerService();
-  final ProService _proService = ProService();
 
   bool _notificationsEnabled = true;
   bool _micDefault = true;
   bool _camDefault = true;
 
   bool _isPro = false;
+
+  /// Nom du forfait actif (PRO / MAX) — lu depuis Firestore.
+  String _planLabel = 'PRO';
+
   DateTime? _proExpiry;
   bool _loadingPro = true;
 
@@ -119,27 +123,20 @@ class _SettingsScreenState extends State<SettingsScreen>
 
       final data = doc.data()!;
 
-      final isPro = data['isPro'] == true;
+      // STATUT RÉEL : via le modèle utilisateur (plan + date d'expiration),
+      // compatible ancien système (isPro) et nouveau (plan pro/max Wave).
+      final user = UserModel.fromJson(data);
 
-      final rawExpiry = data['proExpiresAt'] ?? data['proExpiry'];
+      final plan = user.effectivePlan;
 
-      DateTime? expiry;
-
-      if (rawExpiry is Timestamp) {
-        expiry = rawExpiry.toDate();
-      } else if (rawExpiry is String) {
-        expiry = DateTime.tryParse(rawExpiry);
-      } else if (rawExpiry is int) {
-        expiry = DateTime.fromMillisecondsSinceEpoch(rawExpiry);
-      }
-
-      final isValid = isPro && expiry != null && expiry.isAfter(DateTime.now());
+      final active = plan != SubscriptionPlan.free;
 
       if (!mounted) return;
 
       setState(() {
-        _isPro = isValid;
-        _proExpiry = isValid ? expiry : null;
+        _isPro = active;
+        _planLabel = plan == SubscriptionPlan.max ? 'MAX' : 'PRO';
+        _proExpiry = active ? user.subscriptionEndDate : null;
         _loadingPro = false;
       });
     } catch (_) {
@@ -653,39 +650,22 @@ class _SettingsScreenState extends State<SettingsScreen>
                           onTap: () async {
                             HapticFeedback.mediumImpact();
 
-                            final uid =
-                                FirebaseAuth.instance.currentUser?.uid ?? '';
-
                             if (_isPro) {
-                              if (context.mounted) {
-                                _errorHandler.showInfoSnackBar(
-                                  context,
-                                  'CRUX PRO actif — '
-                                  '${_proExpiryText()}',
-                                );
-                              }
+                              _errorHandler.showInfoSnackBar(
+                                context,
+                                'CRUX $_planLabel actif — '
+                                '${_proExpiryText()}',
+                              );
                               return;
                             }
 
-                            try {
-                              await _proService.startPayment(
-                                userId: uid,
-                                userName:
-                                    FirebaseAuth
-                                        .instance
-                                        .currentUser
-                                        ?.displayName ??
-                                    'Utilisateur',
-                                userEmail:
-                                    FirebaseAuth.instance.currentUser?.email,
-                              );
-                            } catch (error) {
-                              if (context.mounted) {
-                                _errorHandler.showError(
-                                  context,
-                                  error.toString(),
-                                );
-                              }
+                            // VRAI tunnel d'abonnement Wave (ProScreen) :
+                            // lien marchand + vérification automatique +
+                            // activation immédiate du forfait.
+                            await Navigator.pushNamed(context, '/pro');
+
+                            if (context.mounted) {
+                              await _load();
                             }
                           },
                           child: Container(
@@ -871,7 +851,8 @@ class _SettingsScreenState extends State<SettingsScreen>
                               _Tile(
                                 icon: Icons.info_outline,
                                 title: AppTranslations.t('app_name', lang),
-                                subtitle: 'CRUX v1.0.0',
+                                // Version RÉELLE de l'app (pubspec).
+                                subtitle: 'CRUX v${AppConfig.appVersion}',
                                 showChevron: false,
                               ),
                               const _Hairline(),

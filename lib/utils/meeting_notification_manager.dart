@@ -1,5 +1,6 @@
 import 'io_compat.dart' show Platform;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:flutter_timezone/flutter_timezone.dart';
@@ -166,6 +167,18 @@ class MeetingNotificationManager {
   }) async {
     await initialize();
     if (!_ready) return 0;
+
+    // Réglage « Notifications push » (Paramètres) : quand il est désactivé,
+    // AUCUN rappel n'est programmé — le réglage est réellement fonctionnel.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool('crux_notifications') == false) {
+        logger.i('🔕 Rappels désactivés (réglage utilisateur) pour $meetingId');
+        return 0;
+      }
+    } catch (_) {
+      // Préférences illisibles : on programme normalement.
+    }
 
     await cancelForMeeting(meetingId);
 
