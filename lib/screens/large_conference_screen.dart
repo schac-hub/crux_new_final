@@ -1908,8 +1908,12 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
     }
 
     try {
-      // API actuelle de livekit_client (setSpeakerphoneOn est dépréciée).
-      await AudioManager.instance.setSpeakerOutputPreferred(next);
+      // API PORTABLE : `Hardware.setSpeakerphoneOn` existe dans toutes les
+      // versions de livekit_client (la CI résout une version plus ancienne
+      // que la locale, où `AudioManager` n'existe pas encore). Dépréciée en
+      // local (2.11) mais fonctionnelle — ignore le warning.
+      // ignore: deprecated_member_use
+      await Hardware.instance.setSpeakerphoneOn(next);
     } catch (e) {
       logger.w('Speakerphone toggle failed', error: e);
 
