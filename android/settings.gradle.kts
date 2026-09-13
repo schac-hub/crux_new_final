@@ -26,7 +26,9 @@ pluginManagement {
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("dev.flutter.flutter-gradle-plugin") apply false
-    id("com.android.application") version "8.9.1" apply false
+    // AGP 8.11.1 : minimum exigé par le plugin Gradle de Flutter 3.47.2
+    // (8.9.1 était refusé : "lower than Flutter's minimum supported version").
+    id("com.android.application") version "8.11.1" apply false
     id("org.jetbrains.kotlin.android") version "1.9.22" apply false
     id("com.google.gms.google-services") version "4.4.2" apply false
 }
