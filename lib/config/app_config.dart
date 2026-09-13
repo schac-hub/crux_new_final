@@ -107,6 +107,25 @@ class AppConfig {
   static const int freeMeetingDurationMinutes = 105; // 1 h 45 min
 
   // ===========================================================================
+  // STOCKAGE DE FICHIERS (alternative gratuite à Firebase Storage)
+  // ===========================================================================
+
+  /// Les images de chat sont intégrées inline (base64) dans Firestore.
+  /// Les fichiers volumineux passent par Cloudinary (plan gratuit) si ces
+  /// deux valeurs sont fournies au build :
+  /// --dart-define=CLOUDINARY_CLOUD_NAME=xxxx
+  /// --dart-define=CLOUDINARY_UPLOAD_PRESET=yyyy  (preset NON signé)
+  static const String cloudinaryCloudName = String.fromEnvironment(
+    'CLOUDINARY_CLOUD_NAME',
+    defaultValue: '',
+  );
+
+  static const String cloudinaryUploadPreset = String.fromEnvironment(
+    'CLOUDINARY_UPLOAD_PRESET',
+    defaultValue: '',
+  );
+
+  // ===========================================================================
   // FIRESTORE
   // ===========================================================================
 

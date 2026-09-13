@@ -10,6 +10,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image/image.dart' as img;
 import 'package:livekit_client/livekit_client.dart' hide logger;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -856,6 +857,8 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
                 isPrivate: data['isPrivate'] == true,
                 fileUrl: data['fileUrl']?.toString(),
                 fileName: data['fileName']?.toString(),
+                fileData: data['fileData']?.toString(),
+                fileType: data['fileType']?.toString(),
               ),
             );
           }
@@ -947,11 +950,57 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
   }
 
   // ===========================================================================
-  // PARTAGE DE FICHIERS DANS LE CHAT (FileSharingService + Firebase Storage)
+  // PARTAGE DE FICHIERS DANS LE CHAT (inline Firestore, sans Firebase Storage)
   // ===========================================================================
 
-  /// Partage d'un fichier (ou d'une photo) dans le chat : upload Firebase
-  /// Storage + métadonnées Firestore + message de chat avec pièce jointe.
+  /// Compresse une photo pour l'intégration inline (max 1280 px, JPEG 72).
+  /// Pure Dart (`package:image`) : fonctionne aussi sur le web.
+  Future<Uint8List> _compressChatImage(
+    Uint8List source,
+    String fileName,
+  ) async {
+    try {
+      final decoded = img.decodeImage(source);
+
+      if (decoded == null) return source;
+
+      final maxDim = 1280;
+
+      img.Image resized = decoded;
+
+      if (decoded.width > maxDim || decoded.height > maxDim) {
+        resized = img.copyResize(
+          decoded,
+          width:
+              decoded.width >= decoded.height
+                  ? maxDim
+                  : null,
+          height:
+              decoded.height > decoded.width
+                  ? maxDim
+                  : null,
+        );
+      }
+
+      // Les GIF animés ne passent pas par l'encodage JPEG (1 frame seulement).
+      if (fileName.toLowerCase().endsWith('.gif')) {
+        final png = Uint8List.fromList(img.encodePng(resized));
+
+        if (png.length <= FileSharingService.maxInlineBytes) return png;
+      }
+
+      final jpeg = Uint8List.fromList(img.encodeJpg(resized, quality: 72));
+
+      return jpeg.length < source.length ? jpeg : source;
+    } catch (e) {
+      logger.w('Image compression failed — envoi des octets d\'origine', error: e);
+      return source;
+    }
+  }
+
+  /// Partage d'un fichier (ou d'une photo) dans le chat : les octets sont
+  /// intégrés inline dans le message Firestore (base64) — PAS de Firebase
+  /// Storage (facturable). Fichiers volumineux : Cloudinary si configuré.
   Future<void> _shareChatFile({bool imageOnly = false}) async {
     try {
       final result =
@@ -965,8 +1014,8 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
       if (!mounted || result == null || result.files.isEmpty) return;
 
       final picked = result.files.first;
-      final bytes = picked.bytes;
-      final name = picked.name;
+      var bytes = picked.bytes;
+      var name = picked.name;
 
       if (bytes == null || bytes.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -974,6 +1023,20 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         );
         return;
       }
+
+      // Les photos sont compressées AVANT l'inline (pour passer sous la
+      // limite Firestore et économiser les lectures).
+      if (imageOnly && _ChatMessage.isImageName(name)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Optimisation de l\'image…')),
+          );
+        }
+
+        bytes = await _compressChatImage(bytes, name);
+      }
+
+      if (!mounted) return;
 
       ScaffoldMessenger.of(
         context,
@@ -989,8 +1052,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
 
       final isImage = _ChatMessage.isImageName(data['fileName']?.toString());
 
-      // Message de chat lié au fichier : le rendu affiche un aperçu pour les
-      // images, une pièce jointe pour le reste.
+      // Message de chat lié au fichier : inline (fileData) OU URL (Cloudinary).
       await _db
           .collection(AppConfig.meetingsCollection)
           .doc(widget.meetingId)
@@ -1000,9 +1062,11 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
             'sender': widget.userName,
             'message': '${isImage ? '📷' : '📎'} ${data['fileName']}',
             'text': '${isImage ? '📷' : '📎'} ${data['fileName']}',
-            'fileUrl': data['fileUrl'],
+            if (data['fileData'] != null) 'fileData': data['fileData'],
+            if (data['fileUrl'] != null) 'fileUrl': data['fileUrl'],
             'fileName': data['fileName'],
             'fileSize': data['fileSize'],
+            'fileType': data['fileType'],
             'timestamp': FieldValue.serverTimestamp(),
             'isPrivate': false,
           });
@@ -5714,6 +5778,13 @@ class _ChatMessage {
 
   final String? fileName;
 
+  /// Octets inline (base64, SANS préfixe data:) — alternative gratuite à
+  /// Firebase Storage : l'image vit dans le document de chat Firestore.
+  final String? fileData;
+
+  /// Type déclaré ('image' / 'document') par l'expéditeur.
+  final String? fileType;
+
   const _ChatMessage({
     required this.senderId,
     required this.sender,
@@ -5722,6 +5793,8 @@ class _ChatMessage {
     required this.isPrivate,
     this.fileUrl,
     this.fileName,
+    this.fileData,
+    this.fileType,
   });
 
   static const _imageExtensions = [
@@ -5742,7 +5815,21 @@ class _ChatMessage {
     return _imageExtensions.any(lower.endsWith);
   }
 
-  bool get isImageAttachment => isImageName(fileName);
+  bool get isImageAttachment =>
+      fileType == 'image' || isImageName(fileName);
+
+  /// Octets décodés de la pièce jointe inline (null si absent/invalide).
+  Uint8List? get inlineBytes {
+    final data = fileData;
+
+    if (data == null || data.isEmpty) return null;
+
+    try {
+      return base64Decode(data);
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 // =============================================================================
@@ -5768,6 +5855,88 @@ class _ChatBubble extends StatelessWidget {
       }
     } catch (_) {
       // Lancement impossible : silencieux côté UI.
+    }
+  }
+
+  /// Visionneuse plein écran d'une photo inline partagée dans le chat,
+  /// avec bouton d'enregistrement (téléchargement web / dossier Documents).
+  static void _showImageViewer(BuildContext context, _ChatMessage message) {
+    final bytes = message.inlineBytes;
+
+    if (bytes == null) return;
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.black,
+          insetPadding: const EdgeInsets.all(16),
+          child: Stack(
+            children: [
+              Center(
+                child: InteractiveViewer(
+                  maxScale: 4,
+                  child: Image.memory(bytes, fit: BoxFit.contain),
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  tooltip: 'Enregistrer',
+                  onPressed: () => _saveInlineAttachment(dialogContext, message),
+                  icon: const Icon(Icons.download, color: Colors.white),
+                ),
+              ),
+              Positioned(
+                top: 8,
+                left: 8,
+                child: IconButton(
+                  tooltip: 'Fermer',
+                  onPressed: () => Navigator.pop(dialogContext),
+                  icon: const Icon(Icons.close, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Enregistre la pièce jointe inline : téléchargement navigateur (web)
+  /// ou fichier dans le dossier Documents (natif).
+  static Future<void> _saveInlineAttachment(
+    BuildContext context,
+    _ChatMessage message,
+  ) async {
+    final bytes = message.inlineBytes;
+
+    if (bytes == null) return;
+
+    final name = message.fileName ?? 'crux_fichier';
+
+    try {
+      final savedPath = await exportBinaryFile(name, bytes);
+
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            savedPath != null ? 'Enregistré : $savedPath' : 'Téléchargé ✓',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enregistrement impossible.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
     }
   }
 
@@ -5816,7 +5985,39 @@ class _ChatBubble extends StatelessWidget {
               ),
             ),
             // Aperçu inline pour les photos partagées dans le chat.
-            if (message.fileUrl != null && message.isImageAttachment)
+            // 1) Octets inline (base64, sans service de stockage).
+            if (message.isImageAttachment && message.inlineBytes != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: GestureDetector(
+                  onTap: () => _showImageViewer(context, message),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.memory(
+                      message.inlineBytes!,
+                      width: 240,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      errorBuilder: (context, error, stackTrace) {
+                        return Container(
+                          width: 240,
+                          height: 44,
+                          color: Colors.black26,
+                          alignment: Alignment.center,
+                          child: const Text(
+                            'Aperçu indisponible',
+                            style: TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            // 2) Image servie par URL (Cloudinary — gros fichiers).
+            if (message.isImageAttachment &&
+                message.inlineBytes == null &&
+                message.fileUrl != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: GestureDetector(
@@ -5861,7 +6062,56 @@ class _ChatBubble extends StatelessWidget {
                   ),
                 ),
               ),
-            if (message.fileUrl != null && !message.isImageAttachment)
+            // Document inline : toucher pour télécharger/enregistrer.
+            if (!message.isImageAttachment && message.inlineBytes != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: InkWell(
+                  onTap: () => _saveInlineAttachment(context, message),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.insert_drive_file_outlined,
+                          color: Colors.white70,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            message.fileName ?? 'Fichier',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        const Icon(
+                          Icons.download,
+                          color: Colors.white38,
+                          size: 14,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            // Document servi par URL (Cloudinary).
+            if (!message.isImageAttachment &&
+                message.inlineBytes == null &&
+                message.fileUrl != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: InkWell(

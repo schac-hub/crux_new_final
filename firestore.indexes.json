@@ -2,7 +2,7 @@
   "indexes": [
     {
       "collectionGroup": "scheduled_meetings",
-      "queryScope": "Collection",
+      "queryScope": "COLLECTION",
       "fields": [
         {
           "fieldPath": "participants",
@@ -20,7 +20,7 @@
     },
     {
       "collectionGroup": "scheduled_meetings",
-      "queryScope": "Collection",
+      "queryScope": "COLLECTION",
       "fields": [
         {
           "fieldPath": "participants",
@@ -38,7 +38,7 @@
     },
     {
       "collectionGroup": "meetings",
-      "queryScope": "Collection",
+      "queryScope": "COLLECTION",
       "fields": [
         {
           "fieldPath": "participants",
@@ -56,7 +56,7 @@
     },
     {
       "collectionGroup": "meetings",
-      "queryScope": "Collection",
+      "queryScope": "COLLECTION",
       "fields": [
         {
           "fieldPath": "participants",
@@ -74,7 +74,7 @@
     },
     {
       "collectionGroup": "meetings",
-      "queryScope": "Collection",
+      "queryScope": "COLLECTION",
       "fields": [
         {
           "fieldPath": "participants",

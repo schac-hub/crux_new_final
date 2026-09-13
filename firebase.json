@@ -87,8 +87,5 @@
         }
       }
     }
-  },
-  "storage": {
-    "rules": "storage.rules"
   }
 }
