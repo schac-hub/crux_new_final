@@ -1,34 +1,22 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="/crux_new_final/">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="CRUX - Video conferencing app with LiveKit integration. Join meetings via web browser without installing the app.">
-  
-  <!-- Viewport meta tag for responsive design on iOS -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <!-- Viewport meta tag for responsive design on iOS (viewport-fit=cover :
+       respecte les encoches/barres Safari iOS dans toute l'UI) -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="crux">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  
+
   <!-- Additional iOS optimizations -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -37,18 +25,67 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>crux</title>
+  <title>CRUX — Réunion</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    /* Écran d'attente brandé : le téléchargement du moteur Flutter web peut
+       prendre plusieurs secondes — sans cet écran, le navigateur affiche une
+       page blanche pendant tout ce temps. Il est remplacé dès la première
+       frame Flutter (voir le script de suppression ci-dessous). */
+    html, body { margin: 0; padding: 0; background: #0A0A0F; height: 100%; }
+    #crux-splash {
+      position: fixed; inset: 0; z-index: 9999;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 18px;
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      background: #0A0A0F; color: rgba(255, 255, 255, 0.7);
+    }
+    #crux-splash .logo {
+      width: 72px; height: 72px; border-radius: 20px;
+      background: linear-gradient(135deg, #FFFFFF 0%, #B8B8C4 100%);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 34px; font-weight: 800; color: #0A0A0F; letter-spacing: -1px;
+    }
+    #crux-splash .name {
+      font-size: 18px; font-weight: 700; color: #FFFFFF; letter-spacing: 3px;
+    }
+    #crux-splash .spinner {
+      width: 26px; height: 26px; border-radius: 50%;
+      border: 3px solid rgba(255, 255, 255, 0.15);
+      border-top-color: #FFFFFF; animation: crux-spin 0.9s linear infinite;
+    }
+    @keyframes crux-spin { to { transform: rotate(360deg); } }
+    #crux-splash .hint { font-size: 12px; color: rgba(255, 255, 255, 0.4); }
+  </style>
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
+  <div id="crux-splash">
+    <div class="logo">C</div>
+    <div class="name">CRUX</div>
+    <div class="spinner"></div>
+    <div class="hint">Chargement de la réunion…</div>
+  </div>
 
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
+  <script>
+    // Supprime l'écran d'attente dès que Flutter peint sa première frame
+    // (et en dernier recours après 30 s pour ne jamais rester bloqué dessus).
+    (function () {
+      var splash = document.getElementById('crux-splash');
+      if (!splash) return;
+      var removed = false;
+      var remove = function () {
+        if (removed) return;
+        removed = true;
+        splash.remove();
+      };
+      if (document.body.addEventListener) {
+        document.body.addEventListener('flutter-first-frame', remove);
+      }
+      setTimeout(remove, 30000);
+    })();
+  </script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
