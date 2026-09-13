@@ -37,7 +37,11 @@ jobs:
     - name: Build web app
       run: |
         # CORRIGÉ (bug #12) : LIVEKIT_WSS_URL aligné sur le sandbox ID crux-6l6num
-        flutter build web --release \
+        # --pwa-strategy=none : PAS de service worker Flutter — il servait
+        # l'ancienne version en cache aux visiteurs même après déploiement.
+        # web/flutter_service_worker.js (stub de neutralisation) est déployé
+        # à la place pour désinstaller le SW existant des navigateurs.
+        flutter build web --release --pwa-strategy=none \
           --base-href /crux_new_final/ \
           --dart-define=LIVEKIT_WSS_URL="wss://crux-6l6num.sandbox.livekit.io" \
           --dart-define=LIVEKIT_SANDBOX_ID="crux-6l6num" \
