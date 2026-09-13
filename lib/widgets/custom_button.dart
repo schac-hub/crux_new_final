@@ -51,6 +51,8 @@ class _CustomButtonState extends State<CustomButton> {
           padding:
               widget.padding ??
               const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+          // SANS surbrillance : les glows colorés (BoxShadow) ralentissaient
+          // le rendu et étaient explicitement retirés de l'UI.
           decoration: BoxDecoration(
             color:
                 widget.isLoading
@@ -59,13 +61,6 @@ class _CustomButtonState extends State<CustomButton> {
                     ? bgColor.withValues(alpha: 0.8)
                     : bgColor,
             borderRadius: BorderRadius.circular(borderRadius),
-            boxShadow: [
-              BoxShadow(
-                color: bgColor.withValues(alpha: _isPressed ? 0.2 : 0.3),
-                blurRadius: _isPressed ? 8 : 12,
-                offset: Offset(0, _isPressed ? 2 : 4),
-              ),
-            ],
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,

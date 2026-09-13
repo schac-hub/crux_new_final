@@ -682,17 +682,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _header() {
-    final initials =
-        _displayName.trim().isEmpty
-            ? 'C'
-            : _displayName
-                .trim()
-                .split(RegExp(r'\s+'))
-                .take(2)
-                .map((w) => w[0])
-                .join()
-                .toUpperCase();
-
     Widget avatar;
     if (_photoBytes != null) {
       avatar = CircleAvatar(
@@ -700,15 +689,21 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundImage: MemoryImage(_photoBytes!),
       );
     } else {
-      avatar = CircleAvatar(
-        radius: 24,
-        backgroundColor: AppColors.primary,
-        child: Text(
-          initials,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
+      // Pas de photo de profil : on affiche le LOGO de l'application
+      // (celui de l'écran d'inscription) au lieu de l'initiale « C ».
+      avatar = Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.asset(
+            'assets/images/icon.png',
+            fit: BoxFit.cover,
           ),
         ),
       );

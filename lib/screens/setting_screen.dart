@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/app_translations.dart';
 import '../providers/locale_provider.dart';
@@ -879,35 +878,19 @@ class _SettingsScreenState extends State<SettingsScreen>
                               _Tile(
                                 icon: Icons.description_outlined,
                                 title: AppTranslations.t('terms', lang),
-                                onTap: () async {
-                                  const url = 'https://crux.app/terms';
-
-                                  final uri = Uri.parse(url);
-
-                                  if (await canLaunchUrl(uri)) {
-                                    await launchUrl(
-                                      uri,
-                                      mode: LaunchMode.externalApplication,
-                                    );
-                                  }
-                                },
+                                // Écran intégré (l'ancien lien externe
+                                // crux.app/terms n'existait pas).
+                                onTap: () =>
+                                    Navigator.pushNamed(context, '/terms'),
                               ),
                               const _Hairline(),
                               _Tile(
                                 icon: Icons.privacy_tip_outlined,
                                 title: AppTranslations.t('privacy', lang),
-                                onTap: () async {
-                                  const url = 'https://crux.app/privacy';
-
-                                  final uri = Uri.parse(url);
-
-                                  if (await canLaunchUrl(uri)) {
-                                    await launchUrl(
-                                      uri,
-                                      mode: LaunchMode.externalApplication,
-                                    );
-                                  }
-                                },
+                                // Écran intégré (l'ancien lien externe
+                                // crux.app/privacy n'existait pas).
+                                onTap: () =>
+                                    Navigator.pushNamed(context, '/privacy'),
                               ),
                               const _Hairline(),
                               _Tile(

@@ -158,18 +158,7 @@ class _ConsentScreenState extends State<ConsentScreen> {
                                   colors: [Colors.grey, Colors.grey],
                                 ),
                         borderRadius: BorderRadius.circular(16),
-                        boxShadow:
-                            (_termsAccepted && _privacyAccepted)
-                                ? [
-                                  BoxShadow(
-                                    color: AppColors.primary.withValues(
-                                      alpha: 0.4,
-                                    ),
-                                    blurRadius: 16,
-                                    offset: const Offset(0, 6),
-                                  ),
-                                ]
-                                : [],
+                        // SANS surbrillance : glow coloré retiré.
                       ),
                       child: ElevatedButton(
                         onPressed:

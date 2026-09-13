@@ -24,6 +24,12 @@ class AuthService {
 
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
+  /// Vrai quand la dernière tentative Google a initié une redirection
+  /// pleine page : `signInWithGoogle()` renvoie null dans ce cas, mais ce
+  /// n'est PAS une annulation — la connexion se termine après le
+  /// rechargement (l'UI doit afficher « Redirection… » et patienter).
+  static bool redirectInitiated = false;
+
   Future<UserModel?> signUp({
     required String email,
     required String password,
@@ -32,9 +38,18 @@ class AuthService {
     try {
       _logger.i('Sign up: $email');
 
+      // Timeout OBLIGATOIRE : sans lui, un réseau lent faisait tourner le
+      // spinner d'inscription indéfiniment (le login en avait déjà un).
       final userCredential = await _auth.createUserWithEmailAndPassword(
         email: email.trim(),
         password: password,
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          throw Exception(
+            'Délai d\'inscription dépassé. Vérifiez votre connexion internet.',
+          );
+        },
       );
 
       final user = userCredential.user;
@@ -116,7 +131,7 @@ class AuthService {
       User? user;
 
       if (kIsWeb) {
-        // ── WEB : popup directe via Firebase Auth ──────────────────────
+        // ── WEB : popup via Firebase Auth, avec repli redirection ───────
         final provider = GoogleAuthProvider()
           ..addScope('email')
           ..addScope('https://www.googleapis.com/auth/userinfo.profile')
@@ -125,29 +140,41 @@ class AuthService {
         try {
           final cred = await _auth
               .signInWithPopup(provider)
-              .timeout(const Duration(seconds: 30));
+              .timeout(const Duration(seconds: 15));
           user = cred.user;
         } on FirebaseAuthException catch (e) {
-          // Popup bloquée par le navigateur ou environnement restreint :
-          // on retente via redirection pleine page.
+          // Popup BLOQUÉE par le navigateur (très courant sur Chrome
+          // mobile) : le bug historique faisait `rethrow` ici, donc la
+          // connexion Google échouait TOUJOURS sur mobile web. Correct :
+          // basculer sur la redirection pleine page — le résultat arrive
+          // via authStateChanges après le rechargement.
           if (e.code == 'popup-blocked' ||
-              e.code == 'popup-closed-by-user' ||
               e.code == 'operation-not-supported-in-this-environment' ||
               e.code == 'cancelled-popup-request') {
-            rethrow;
+            redirectInitiated = true;
+
+            await _auth.signInWithRedirect(provider);
+            return null;
           }
-          // Domaine non autorisé (ex. GitHub Pages non déclaré dans la
-          // Firebase Console) : message explicite plutôt qu'une erreur brute.
+          // Utilisateur : il a fermé la popup lui-même → annulation.
+          if (e.code == 'popup-closed-by-user') {
+            return null;
+          }
+          // Domaine non autorisé : la redirection échouerait aussi —
+          // message explicite avec le domaine à ajouter.
           if (e.code == 'auth/unauthorized-domain' ||
               e.code == 'unauthorized-domain') {
             throw Exception(
-              'Ce domaine n\'est pas autorisé dans Firebase. Ajoutez-le dans '
+              'Connexion Google impossible depuis ce domaine. Ajoutez '
+              '« schac-hub.github.io » dans Firebase Console → '
               'Authentication → Settings → Authorized domains.',
             );
           }
           rethrow;
         } on TimeoutException {
           // Popup trop lente : redirection complète en dernier recours.
+          redirectInitiated = true;
+
           await _auth.signInWithRedirect(provider);
           return null; // Le résultat arrive après le rechargement de page.
         }

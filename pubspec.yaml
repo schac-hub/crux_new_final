@@ -23,7 +23,10 @@ dependencies:
   firebase_storage: ^12.0.0
 
   # LiveKit
-  livekit_client: ^2.6.4
+  # Version épinglée exacte : la CI (Codemagic, Flutter 3.47.2) et le local
+  # doivent résoudre la MÊME version — `^2.6.4` tirait des versions diverses
+  # selon le SDK (AudioManager absent < 2.11, Hardware déprécié ≥ 2.11).
+  livekit_client: 2.11.0
 
   # Google
   google_sign_in: ^6.2.2

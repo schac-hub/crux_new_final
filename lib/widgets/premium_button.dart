@@ -74,19 +74,7 @@ class _PremiumButtonState extends State<PremiumButton> {
                       end: Alignment.bottomRight,
                     ),
             borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: bgColor.withValues(alpha: 0.3),
-                blurRadius: _isPressed ? 12 : 20,
-                offset: Offset(0, _isPressed ? 4 : 8),
-              ),
-              if (widget.isPrimary)
-                const BoxShadow(
-                  color: PremiumColors.fireGlow,
-                  blurRadius: 16,
-                  offset: Offset(0, 0),
-                ),
-            ],
+            // SANS surbrillance : glow coloré (fireGlow inclus) retiré.
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,

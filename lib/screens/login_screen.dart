@@ -106,6 +106,8 @@ class _LoginScreenState extends State<LoginScreen>
       _error = null;
     });
     try {
+      AuthService.redirectInitiated = false;
+
       final success =
           await Provider.of<CruxAuthProvider>(
             context,
@@ -113,6 +115,13 @@ class _LoginScreenState extends State<LoginScreen>
           ).signInWithGoogle();
 
       if (!success && mounted) {
+        if (AuthService.redirectInitiated) {
+          // Redirection pleine page vers Google : le rechargement qui suit
+          // complète la connexion via authStateChanges — ce n'est PAS une
+          // annulation, on garde le spinner.
+          return;
+        }
+
         _shakeError('Connexion Google annulée');
         setState(() => _loading = false);
         return;
