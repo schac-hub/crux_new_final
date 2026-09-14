@@ -16,6 +16,11 @@ class _MinimizedData {
   final VoidCallback onExpand;
   final VoidCallback onEnd;
 
+  /// Route de l'écran de réunion : permet à [MinimizedMeetingOverlay.expand]
+  /// de remonter la pile JUSQU'À la réunion (évite d'ouvrir une seconde
+  /// connexion avec la même identité → « deux profils d'une même personne »).
+  final Route<Object?>? meetingRoute;
+
   const _MinimizedData({
     required this.meetingName,
     required this.participantCount,
@@ -23,6 +28,7 @@ class _MinimizedData {
     required this.videoTrack,
     required this.onExpand,
     required this.onEnd,
+    required this.meetingRoute,
   });
 }
 
@@ -39,7 +45,22 @@ class MinimizedMeetingOverlay {
 
   OverlayEntry? _entry;
 
+  _MinimizedData? _data;
+
   bool get isShown => _entry != null;
+
+  /// Remonte la pile de navigation JUSQU'À la réunion réduite et la
+  /// réaffiche. À utiliser au lieu de re-rejoindre la réunion (qui ouvrirait
+  /// une seconde connexion avec la même identité LiveKit).
+  void expand(BuildContext context) {
+    final route = _data?.meetingRoute;
+
+    hide();
+
+    if (route != null && route.isActive) {
+      Navigator.of(context).popUntil((r) => r == route);
+    }
+  }
 
   void show({
     required BuildContext context,
@@ -57,6 +78,7 @@ class MinimizedMeetingOverlay {
       participantCount: participantCount,
       elapsedSeconds: elapsedSeconds,
       videoTrack: videoTrack,
+      meetingRoute: ModalRoute.of(context),
       onExpand: () {
         hide();
         onExpand();

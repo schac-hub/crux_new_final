@@ -17,6 +17,7 @@ import '../services/backend_api_service.dart';
 import '../theme/colors.dart';
 import '../wallpaper/app_background.dart';
 import '../utils/logger.dart';
+import '../meeting/minimized_meeting_overlay.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.user});
@@ -98,6 +99,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
   
   void _joinMeeting(MeetingModel meeting) {
+    // GARDE-FOU ANTI DOUBLE CONNEXION : si une réunion est déjà active en
+    // arrière-plan (mini-fenêtre), on y REVIENT au lieu d'ouvrir une seconde
+    // connexion avec la même identité (→ deux profils identiques, guerre de
+    // reconnexions LiveKit).
+    if (MinimizedMeetingOverlay.instance.isShown) {
+      MinimizedMeetingOverlay.instance.expand(context);
+      return;
+    }
+
     Navigator.of(context).pushNamed(
       AppRoutes.meeting,
       arguments: {

@@ -1409,6 +1409,21 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
     for (final participant in participants) {
       meetingProvider.updateParticipant(participant);
     }
+
+    // PURGE DES FANTÔMES : après une reconnexion (expiration du token ~15 min
+    // → nouveau salon LiveKit → nouveaux sid), les entrées de l'ANCIEN salon
+    // restaient dans l'état d'affichage → DEUX profils d'une même personne.
+    // Toute entrée qui n'appartient pas au salon ACTUEL est supprimée.
+    final validSids = <String>{
+      if (room.localParticipant != null) room.localParticipant!.sid,
+      ...room.remoteParticipants.keys,
+    };
+
+    for (final sid in meetingProvider.participantStates.keys.toList()) {
+      if (!validSids.contains(sid)) {
+        meetingProvider.removeParticipant(sid);
+      }
+    }
   }
 
   // ===========================================================================

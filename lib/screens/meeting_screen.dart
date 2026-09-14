@@ -9,6 +9,7 @@ import '../theme/colors.dart';
 import '../widgets/elegant_toast.dart';
 import 'large_conference_screen.dart';
 import '../widgets/app_logo.dart';
+import '../meeting/minimized_meeting_overlay.dart';
 
 class MeetingScreen extends StatefulWidget {
   final String meetingId;
@@ -218,6 +219,15 @@ class _MeetingScreenState extends State<MeetingScreen> {
   }
 
   void _joinCall() {
+    // GARDE-FOU ANTI DOUBLE CONNEXION : une instance de réunion tourne déjà
+    // en mini-fenêtre → on y remonte au lieu d'ouvrir une seconde connexion
+    // avec la même identité (deux profils identiques + guerre de
+    // reconnexions).
+    if (MinimizedMeetingOverlay.instance.isShown) {
+      MinimizedMeetingOverlay.instance.expand(context);
+      return;
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(
