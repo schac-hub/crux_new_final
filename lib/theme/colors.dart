@@ -6,12 +6,14 @@ class AppColors {
   AppColors._();
 
   // ── Obsidienne ────────────────────────────────────────────────────────
-  static const Color _black = Color(0xFF05070A);
-  static const Color _charcoal = Color(0xFF0C1016);
+  // Allégées « légèrement » : le noir #05070A était trop profond à l'écran
+  // (app + web) — on garde l'esprit obsidienne avec plus de respiration.
+  static const Color _black = Color(0xFF10141B);
+  static const Color _charcoal = Color(0xFF171C25);
   static const Color _darkGray2 = Color(0xFF1C212A);
-  static const Color _darkGray3 = Color(0xFF222833);
-  static const Color _darkGray4 = Color(0xFF272C36);
-  static const Color _darkGray5 = Color(0xFF2D3340);
+  static const Color _darkGray3 = Color(0xFF232936);
+  static const Color _darkGray4 = Color(0xFF282E3A);
+  static const Color _darkGray5 = Color(0xFF2E3441);
 
   // ── Argent / blanc ────────────────────────────────────────────────────
   static const Color _white = Color(0xFFF7F8FA);
@@ -51,10 +53,10 @@ class AppColors {
   static const Color textDisabled = Color(0xFF3A414C);
   static const Color textOnPrimary = _black;
 
-  static const Color border = Color(0xFF1E232B);
-  static const Color borderSubtle = Color(0xFF14181F);
+  static const Color border = Color(0xFF282F3B);
+  static const Color borderSubtle = Color(0xFF1D242E);
   static const Color borderFocused = Color(0xFF4A5058);
-  static const Color divider = Color(0xFF14181F);
+  static const Color divider = Color(0xFF1D242E);
 
   static const Color success = _green;
   static const Color successSurface = Color(0xFF0A1A0F);

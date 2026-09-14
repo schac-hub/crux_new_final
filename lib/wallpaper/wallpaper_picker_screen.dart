@@ -1,7 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import 'wallpaper_crop_screen.dart';
 import 'wallpaper_provider.dart';
 import '../theme/colors.dart';
 import 'glass_surface.dart';
@@ -62,12 +65,21 @@ class _WallpaperPickerScreenState extends State<WallpaperPickerScreen> {
       final bytes = await picked.readAsBytes();
       if (bytes.isEmpty) throw Exception('Image illisible');
 
-      final name = picked.name;
-      final ext = name.contains('.')
-          ? name.split('.').last.toLowerCase()
-          : 'jpg';
+      // Étape RECADRAGE : l'utilisateur cadre/zoome la zone voulue avant
+      // application (la sortie est redimensionnée à 1920 px de large).
+      if (!mounted) return;
 
-      await _provider.importAndApplyBytes(bytes, ext: ext);
+      final cropped = await Navigator.of(context).push<Uint8List>(
+        MaterialPageRoute(
+          builder: (_) => WallpaperCropScreen(bytes: bytes),
+        ),
+      );
+
+      // Recadrage annulé → on ne change rien. La sortie du recadrage est
+      // toujours du JPEG (encodage `package:image`).
+      if (cropped == null || cropped.isEmpty) return;
+
+      await _provider.importAndApplyBytes(cropped, ext: 'jpg');
       _applied = true;
     } catch (e) {
       if (mounted) _snack('Import impossible : $e');

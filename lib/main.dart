@@ -95,7 +95,7 @@ void main() {
   // cause — le texte sert au signalement, l'app reste identifiable.
   ErrorWidget.builder = (FlutterErrorDetails details) {
     return Material(
-      color: const Color(0xFF0F0C1A),
+      color: const Color(0xFF10141B),
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -265,7 +265,7 @@ class _ErrorAppState extends State<_ErrorApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
-        backgroundColor: const Color(0xFF0F0C1A),
+        backgroundColor: const Color(0xFF10141B),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(32),
@@ -560,7 +560,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Widget build(BuildContext context) {
     if (_termsAccepted == null) {
       return const Scaffold(
-        backgroundColor: Color(0xFF0A0A0F),
+        backgroundColor: Color(0xFF10141B),
         body: Center(
           child: CircularProgressIndicator(
             color: AppColors.primary,
@@ -575,7 +575,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
-            backgroundColor: Color(0xFF0A0A0F),
+            backgroundColor: Color(0xFF10141B),
             body: Center(
               child: CircularProgressIndicator(
                 color: AppColors.primary,
