@@ -17,7 +17,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
-import 'package:web/web.dart' as web;
 
 import '../config/app_config.dart';
 import '../meeting/minimized_meeting_overlay.dart';
@@ -40,6 +39,7 @@ import '../services/recording_service.dart';
 import '../theme/colors.dart';
 import '../utils/download_file.dart';
 import '../utils/screen_share_support.dart';
+import '../utils/web_audio_output.dart';
 import '../utils/logger.dart';
 import '../meeting/crux_conference_view.dart';
 import '../meeting/entities/speaker_state.dart';
@@ -1350,7 +1350,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
         // (mute/volume) — sinon un participant qui arrive après la coupure
         // du son restait audible.
         if (event.track is RemoteAudioTrack) {
-          _applyWebSpeakerVolume(_speakerphoneOn);
+          applyRemoteAudioOutput(_speakerphoneOn);
         }
       })
       ..on<TrackUnsubscribedEvent>((event) {
@@ -1885,32 +1885,10 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
   // HAUT-PARLEUR (sortie audio)
   // ===========================================================================
 
-  /// Applique le volume de sortie sur web : LiveKit crée un élément
-  /// <audio> par piste distante dans le conteneur `livekit_audio_container`
-  /// — on pilote directement leur volume/mute. Ré-appliqué à chaque
-  /// nouvelle piste audio souscrite (voir TrackSubscribedEvent).
-  void _applyWebSpeakerVolume(bool speakerOn) {
-    if (!kIsWeb) return;
-
-    try {
-      final container = web.document.getElementById('livekit_audio_container');
-
-      if (container == null) return;
-
-      final audios = container.querySelectorAll('audio');
-
-      for (var i = 0; i < audios.length; i++) {
-        final audio = audios.item(i) as web.HTMLAudioElement?;
-
-        if (audio == null) continue;
-
-        audio.muted = !speakerOn;
-        audio.volume = speakerOn ? 1.0 : 0.0;
-      }
-    } catch (e) {
-      logger.w('Web speaker volume failed', error: e);
-    }
-  }
+  // NOTE : la manipulation web des <audio> LiveKit vit dans
+  // `utils/web_audio_output.dart` (import conditionnel) — `package:web`
+  // ne doit JAMAIS être importé directement ici, sinon la build Android
+  // échoue à compiler le moteur Dart.
 
   Future<void> _toggleSpeakerphone() async {
     final next = !_speakerphoneOn;
@@ -1918,7 +1896,7 @@ class _LargeConferenceScreenState extends State<LargeConferenceScreen>
     if (kIsWeb) {
       // Web (Chrome/Safari/Firefox, iOS inclus) : coupe ou rétablit la
       // sortie des pistes audio distantes.
-      _applyWebSpeakerVolume(next);
+      applyRemoteAudioOutput(next);
 
       if (!mounted) return;
 
